@@ -1,0 +1,10 @@
+name: echo
+version: 0.1.0
+description: Trivial echo plugin — RPC smoke test
+runtime: uv
+python: "3.11"
+entrypoint_module: echo_plugin
+hardware:
+  cpu_cores: 1
+  ram_mb: 64
+  gpu: none
