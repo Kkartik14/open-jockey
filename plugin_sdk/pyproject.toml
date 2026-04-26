@@ -2,7 +2,7 @@
 name = "aidj-plugin-sdk"
 version = "0.1.0"
 description = "Stdio JSON-RPC loop shared by every aidj plugin."
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = []
 
 [build-system]

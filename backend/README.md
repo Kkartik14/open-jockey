@@ -95,8 +95,21 @@ Open <http://127.0.0.1:8000/docs> while the server runs for the live OpenAPI spe
 | POST | `/api/plugins/{name}/call` | `PluginCallResponse` |
 | POST | `/api/tracks/ingest` | `Track` |
 | GET | `/api/tracks` | `list[Track]` |
+| POST | `/api/tracks/{hash}/analyze/{analyzer}` | `AnalysisRun` |
+| GET | `/api/tracks/{hash}/analyses` | `list[AnalysisRun]` |
+| GET | `/api/tracks/{hash}/analyses/{analyzer}` | `AnalysisRun` |
 | POST | `/api/jobs` | `EnqueueResponse` |
 | GET | `/api/jobs?status=…` | `list[Job]` |
+
+The `analyze` endpoint:
+
+- 404 if the track or analyzer doesn't exist
+- 200 + `AnalysisRun(status="completed")` on success
+- 200 + `AnalysisRun(status="failed", error=…)` on plugin error or timeout (the run is recorded; check `status`)
+- `force=true` re-runs even when a completed row already exists
+- `timeout` overrides the plugin default
+
+Per-analyzer output schemas (e.g., `BeatGridAnalysis` for `allin1`) are defined in `aidj/store/models.py`. The repo stores raw JSON; the frontend interprets it based on `analyzer_name`.
 
 `status` on `/api/jobs` is validated against the `JobStatus` enum (`queued`, `running`, `completed`, `failed`, `cancelled`). Unknown values return 422.
 

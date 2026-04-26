@@ -12,9 +12,13 @@ Most people have music they love but don't have the time, ear, or DJ training to
 
 ## Status
 
-**Phase 0 — foundation.** Project store, plugin runtime, FastAPI backend, and minimal frontend are wired up and have a green test suite (30 tests).
+**Phase 1 in progress.** The analyzer pipeline is wired end-to-end: schema → repository → API → plugin contract.
 
-Audio analysis, the Transition Candidate Graph, the LLM planner, and the renderer are not built yet. See [Roadmap](#roadmap).
+- ✅ Phase 0 foundation (project store, plugin runtime, FastAPI app, frontend, 38 tests).
+- 🚧 Phase 1: `BeatGridAnalysis` schema, `analysis_runs` repo, analyze API routes, `allin1` plugin scaffolded (deps lock cleanly; first run downloads ~1 GB of torch + demucs + model weights). 54 tests.
+- ⏳ Still pending in Phase 1: madmom + MSAF plugin (experimental — flagged), essentia plugin (key detection), track-detail UI with dual beat grids, structured failure-mode labels.
+
+See [Roadmap](#roadmap).
 
 ## How it works
 
@@ -124,7 +128,7 @@ uv run aidj serve --reload --port 8000
 | Phase | What | Status |
 | --- | --- | --- |
 | 0 | Project Store, plugin runtime, FastAPI app, frontend skeleton, test suite | done |
-| 1 | Real analyzer plugins: `allin1` (primary beats/downbeats/sections), `madmom`+`MSAF` (experimental), `essentia` (key) | next |
+| 1 | Analyzer pipeline (schema/repo/API/plugin contract); `allin1` scaffolded; `madmom`+`MSAF` (experimental) and `essentia` (key) still pending; track-detail UI still pending | in progress |
 | 2 | Stem-separator bake-off: `htdemucs` vs `htdemucs_ft`, lazy generation | |
 | 3 | Transition Candidate Graph: cue-point extraction, edge generation, scoring, pruning | |
 | 4 | Renderer with automation envelopes, all transition techniques | |
