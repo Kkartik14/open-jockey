@@ -14,6 +14,9 @@ export type Plugin = {
   description: string;
   python: string;
   hardware: { cpu_cores: number; ram_mb: number; gpu: string };
+  concurrency_safe: boolean;
+  default_timeout_sec: number;
+  cloud_audio: boolean;
 };
 
 export type Track = {

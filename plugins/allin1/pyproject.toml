@@ -5,7 +5,9 @@ description = "all-in-one music analyzer plugin for open-jockey"
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "aidj-plugin-sdk",
-    "allin1>=1.1.0",
+    # Pin allin1 exactly so behaviour is reproducible AND matches the Modal
+    # worker (plugins/allin1_remote/modal_worker/analyze.py). Bump in lock-step.
+    "allin1==1.1.0",
 ]
 
 [build-system]

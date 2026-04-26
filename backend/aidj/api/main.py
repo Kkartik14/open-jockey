@@ -8,6 +8,7 @@ lives in this module.
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -20,9 +21,14 @@ from aidj import __version__
 from aidj.config import settings
 from aidj.plugins.manifest import Hardware
 from aidj.plugins.registry import registry
-from aidj.plugins.runtime import PluginError
+from aidj.plugins.runtime import Plugin, PluginError
 from aidj.store import analysis_runs, db, jobs, tracks
-from aidj.store.models import AnalysisRun, AnalysisStatus, Job, JobStatus, Track
+from aidj.store.models import AnalysisRun, Job, JobStatus, Track
+
+CLOUD_AUDIO_OPT_IN_ENV = "AIDJ_ALLOW_CLOUD_AUDIO"
+# RUNNING rows older than ``2 * default_timeout`` are treated as stale (the
+# backend probably crashed mid-run); the next analyze call auto-recovers.
+_STALE_TIMEOUT_MULTIPLIER = 2.0
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +52,9 @@ class PluginInfo(BaseModel):
     description: str
     python: str
     hardware: Hardware
+    concurrency_safe: bool
+    default_timeout_sec: float
+    cloud_audio: bool
 
 
 class PluginCallRequest(BaseModel):
@@ -145,6 +154,9 @@ def list_plugins() -> list[PluginInfo]:
             description=lm.manifest.description,
             python=lm.manifest.python,
             hardware=lm.manifest.hardware,
+            concurrency_safe=lm.manifest.concurrency_safe,
+            default_timeout_sec=lm.manifest.default_timeout_sec,
+            cloud_audio=lm.manifest.cloud_audio,
         )
         for lm in registry().manifests()
     ]
@@ -191,6 +203,24 @@ def list_tracks(limit: int = Query(1000, ge=1, le=10_000)) -> list[Track]:
 # ---------------------------------------------------------------------------
 
 
+def _coerce_confidence(value: Any) -> float | None:
+    """Coerce a plugin-supplied confidence to a SQLite REAL or None.
+
+    Plugins may return strings (``"high"``), nested objects, or sentinel values.
+    Only proper int/float (excluding ``bool``, which is a subclass of int) is
+    acceptable here; everything else is dropped to ``None``.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    return None
+
+
+def _cloud_audio_allowed() -> bool:
+    return os.environ.get(CLOUD_AUDIO_OPT_IN_ENV, "").strip() == "1"
+
+
 @app.post(
     "/api/tracks/{content_hash}/analyze/{analyzer_name}",
     response_model=AnalysisRun,
@@ -202,9 +232,21 @@ def analyze_track(
 ) -> AnalysisRun:
     """Run ``analyzer_name`` on the given track. Returns the resulting AnalysisRun.
 
-    A successful plugin call yields ``status=COMPLETED``; a plugin error yields a
-    persisted ``status=FAILED`` row (still HTTP 200 — the run was recorded).
-    Use ``force=true`` to re-analyze even when a completed row exists.
+    Lifecycle:
+
+    - 404 if the track or analyzer plugin doesn't exist.
+    - 403 if the plugin's manifest declares ``cloud_audio: true`` and the
+      backend env doesn't have ``AIDJ_ALLOW_CLOUD_AUDIO=1`` — explicit opt-in
+      for plugins that send audio bytes off the local machine.
+    - The (track, analyzer, version) slot is acquired atomically via
+      ``analysis_runs.claim_running``:
+        * **RUNNING** elsewhere and not stale → return that row (caller polls).
+        * **COMPLETED** without ``force`` → return cached row.
+        * **RUNNING** older than ``2 × default_timeout`` → auto-recovery, claim it.
+        * **force=true** overrides RUNNING/COMPLETED and re-runs.
+    - Once claimed, the plugin is invoked and the row transitions to
+      ``COMPLETED`` or ``FAILED``. Plugin failures are persisted (HTTP 200 with
+      ``status="failed"``); the caller reads ``status``.
     """
     track = tracks.get(content_hash)
     if track is None:
@@ -214,48 +256,72 @@ def analyze_track(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    version = plugin.manifest.version
-    if not body.force:
-        existing = analysis_runs.get_completed(content_hash, analyzer_name, version)
-        if existing is not None:
-            return existing
+    if plugin.manifest.manifest.cloud_audio and not _cloud_audio_allowed():
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"analyzer '{analyzer_name}' uploads audio to a remote service. "
+                f"Set {CLOUD_AUDIO_OPT_IN_ENV}=1 in the backend's environment to opt in."
+            ),
+        )
 
-    started_at = analysis_runs.utc_now_iso()
+    stale_after_sec = plugin.default_timeout * _STALE_TIMEOUT_MULTIPLIER
+    claim = analysis_runs.claim_running(
+        track_hash=content_hash,
+        analyzer_name=analyzer_name,
+        analyzer_version=plugin.manifest.version,
+        force=body.force,
+        stale_after_sec=stale_after_sec,
+    )
+    if not claim.claimed:
+        return claim.run
+
+    return _execute_with_claim(track, plugin, body.timeout, claim.token)
+
+
+def _execute_with_claim(
+    track: Track,
+    plugin: Plugin,
+    timeout: float | None,
+    claim_token: str,
+) -> AnalysisRun:
+    """Invoke the plugin under an already-claimed RUNNING row.
+
+    Terminal writes (COMPLETED / FAILED) are conditional on ``claim_token``: if
+    a newer ``claim_running`` (force or stale-recovery) has reused the slot
+    while we were waiting on the plugin, our result is dropped and the current
+    row state is returned instead.
+    """
+    version = plugin.manifest.version
+
     try:
         output = plugin.call(
             "analyze",
             {"audio_path": track.source_path},
-            timeout=body.timeout,
+            timeout=timeout,
         )
     except PluginError as exc:
         log.warning(
             "analysis failed: track=%s analyzer=%s code=%s msg=%s",
-            content_hash[:12], analyzer_name, exc.code, exc.message,
+            track.content_hash[:12], plugin.name, exc.code, exc.message,
         )
-        return analysis_runs.upsert(
-            track_hash=content_hash,
-            analyzer_name=analyzer_name,
+        return analysis_runs.fail_run(
+            track_hash=track.content_hash,
+            analyzer_name=plugin.name,
             analyzer_version=version,
-            status=AnalysisStatus.FAILED,
-            output=None,
-            confidence=None,
+            claim_token=claim_token,
             error=f"[{exc.code}] {exc.message}",
-            started_at=started_at,
             finished_at=analysis_runs.utc_now_iso(),
         )
 
-    confidence = (
-        output.get("confidence") if isinstance(output, dict) else None
-    )
-    return analysis_runs.upsert(
-        track_hash=content_hash,
-        analyzer_name=analyzer_name,
+    raw_confidence = output.get("confidence") if isinstance(output, dict) else None
+    return analysis_runs.complete_run(
+        track_hash=track.content_hash,
+        analyzer_name=plugin.name,
         analyzer_version=version,
-        status=AnalysisStatus.COMPLETED,
+        claim_token=claim_token,
         output=output if isinstance(output, dict) else {"raw": output},
-        confidence=confidence,
-        error=None,
-        started_at=started_at,
+        confidence=_coerce_confidence(raw_confidence),
         finished_at=analysis_runs.utc_now_iso(),
     )
 

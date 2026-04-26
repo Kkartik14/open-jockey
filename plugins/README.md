@@ -43,6 +43,9 @@ The directory **name** under `plugins/` is incidental — what matters is `manif
 | `hardware.cpu_cores` | no | `1` | declared budget; not yet enforced |
 | `hardware.ram_mb` | no | `512` | declared budget; not yet enforced |
 | `hardware.gpu` | no | `none` | `required` / `optional` / `none` |
+| `concurrency_safe` | no | `false` | true when calls don't interfere with each other (e.g. plugin delegates to a remote service). Reserved for the host-side parallelism push — declare it now so plugins don't need a manifest bump later. |
+| `default_timeout_sec` | no | `60` | per-call timeout the host uses if the API caller doesn't override. Heavy analyzers (allin1, Demucs, Modal-backed) should set this generously — e.g. 600. |
+| `cloud_audio` | no | `false` | true when the plugin uploads audio bytes to a non-local service. The analyze API refuses to invoke such plugins unless `AIDJ_ALLOW_CLOUD_AUDIO=1` is set in the backend's env. |
 
 **There is no `version` field on the manifest.** The plugin's version is read from its own `pyproject.toml` `[project].version` at discovery time — the pyproject is the single source of truth. This eliminates drift between manifest YAML, pyproject, and any constant in `__init__.py`.
 
@@ -179,6 +182,90 @@ Using `echo` as the template, here's the minimum work for a new plugin called `f
    ```
 
 5. **First call.** Restart the backend (or hit any plugin route — the registry is lazy). The host will discover `foobar` from its manifest, spin up its venv on first use, and route `POST /api/plugins/foobar/call` to it.
+
+## Remote runtime (Modal)
+
+Some analyzers (`allin1`, Demucs) want serious RAM and a GPU. On modest hardware you can offload them to [Modal](https://modal.com): the host-side plugin stays a thin subprocess, but its `handle()` calls into a deployed Modal function that runs the heavy code on a GPU container. Audio bytes go up; JSON comes back.
+
+### Explicit opt-in: `AIDJ_ALLOW_CLOUD_AUDIO`
+
+Cloud-uploading plugins must declare `cloud_audio: true` in their manifest. The host's analyze route then refuses to invoke them unless the backend was started with the env opt-in:
+
+```bash
+AIDJ_ALLOW_CLOUD_AUDIO=1 cd backend && uv run aidj serve
+```
+
+Without that env, hitting `POST /api/tracks/{hash}/analyze/<cloud-plugin>` returns **403 Forbidden** with a clear message naming the env var. The plugin itself re-checks the env on every call as defense-in-depth — even if a caller bypasses the API and pokes the plugin directly, it still refuses.
+
+There's also a per-upload size guard: by default the plugin rejects audio files larger than 256 MB. Override with `AIDJ_REMOTE_MAX_BYTES=...` (bytes, integer) on the backend.
+
+Why this is still consistent with local-first:
+
+- The audio doesn't go to a music platform. It goes to **your own** Modal function, in **your own** account. Modal sees the bytes only for the duration of the call — they aren't ingested into a catalog or persisted by Modal.
+- The local plugin is the one that knows about your filesystem; the remote function only sees what you pass it.
+- The opt-in env var makes the boundary deliberate every time you start the backend.
+- You can always fall back to the all-local version of the same analyzer if you don't want anything to leave your machine.
+
+### Reference: `allin1_remote`
+
+```
+plugins/allin1_remote/
+├── manifest.yaml             # concurrency_safe: true, gpu: none (locally)
+├── pyproject.toml            # deps: aidj-plugin-sdk + modal (no torch / allin1)
+├── allin1_remote_plugin/
+│   ├── __init__.py
+│   └── __main__.py           # reads bytes, calls modal.Function.remote(), returns JSON
+└── modal_worker/
+    └── analyze.py            # the Modal app: image with allin1, @app.function gpu="T4"
+```
+
+The pattern is **two halves of the same conceptual plugin**:
+
+1. **Local half** (`allin1_remote_plugin/__main__.py`) — runs in the host's plugin runtime as usual; tiny RAM footprint; just shuttles bytes/JSON over the wire.
+2. **Remote half** (`modal_worker/analyze.py`) — defines a `modal.App` with a function whose image bakes in the heavy deps. Deployed once, lives indefinitely.
+
+### Deploy workflow
+
+```bash
+# one-time, after first checkout (or after worker code changes)
+modal deploy plugins/allin1_remote/modal_worker/analyze.py
+```
+
+This builds the container image (~3 minutes the first time), uploads it to Modal, and registers the function as `aidj-analyzers/analyze_allin1`. From then on it's invokable with the user's Modal token via `modal.Function.from_name`.
+
+If you change the worker (new dep, different image), redeploy. The host plugin doesn't need redeployment — it looks the function up by name.
+
+### Version pinning (full transitive freeze)
+
+The Modal image is built from a fully-pinned snapshot, not a top-level pin. Otherwise pip would re-resolve transitive deps (torch, demucs, numpy) on every image rebuild and the remote worker could drift away from the local plugin.
+
+The pin lives in two places that must move together:
+
+- `plugins/allin1/pyproject.toml` + `plugins/allin1/uv.lock` (the local plugin's deps)
+- `plugins/allin1_remote/modal_worker/requirements.txt` (the Modal image's frozen tree)
+
+Regenerate the requirements file after every dependency bump in the local plugin:
+
+```bash
+cd plugins/allin1 && uv export --frozen --no-dev --no-emit-project --no-hashes \
+  | grep -v '^-e ' \
+  > ../allin1_remote/modal_worker/requirements.txt
+```
+
+Then `modal deploy` to push the new image. The local and remote analyzers will install the *same* allin1 / torch / demucs / numpy versions; bake-off comparisons stay apples-to-apples.
+
+### Cost expectations (recent Modal pricing)
+
+| GPU | Cost / hour | Time per 4-min track | Cost / track |
+| --- | --- | --- | --- |
+| T4 | ~$0.59 | ~30–60s | ~$0.005–0.01 |
+| A10G | ~$1.10 | ~15–25s | ~$0.005–0.008 |
+
+A free credit grant typically covers hundreds of personal track analyses per month.
+
+### What's deferred (separate push)
+
+True host-side concurrency. Right now if you fire 4 analyses against `allin1_remote`, the *Modal* side spins up 4 functions, but the host's plugin process serializes the calls (single stdin/stdout). Real fan-out needs the SDK loop to multi-thread and the host's `call()` to match responses by id rather than reading FIFO. That'll come in its own audit-able push so we don't stack complexity on an untested integration.
 
 ## Don't
 

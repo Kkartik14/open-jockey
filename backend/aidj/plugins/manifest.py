@@ -42,6 +42,33 @@ class Manifest(BaseModel):
         description="Module to run with `python -m <entrypoint_module>`",
     )
     hardware: Hardware = Field(default_factory=Hardware)
+    concurrency_safe: bool = Field(
+        default=False,
+        description=(
+            "True if this plugin can serve multiple concurrent calls without "
+            "interfering with itself (e.g. it delegates to a remote service). "
+            "Reserved for a future host-side parallelism push; declare it now "
+            "so plugins don't need a manifest bump later."
+        ),
+    )
+    default_timeout_sec: float = Field(
+        default=60.0,
+        gt=0,
+        description=(
+            "Default per-call timeout in seconds. Heavy analyzers (allin1, "
+            "Demucs, Modal-backed) should declare a generous value here so "
+            "long inferences don't fail at the host's stricter default."
+        ),
+    )
+    cloud_audio: bool = Field(
+        default=False,
+        description=(
+            "True when this plugin uploads audio bytes to a non-local service "
+            "(Modal, etc.). The analyze route refuses to invoke such plugins "
+            "unless AIDJ_ALLOW_CLOUD_AUDIO=1 is set in the backend's env — "
+            "explicit opt-in for the local-first → user-controlled boundary."
+        ),
+    )
 
 
 @dataclass(frozen=True)

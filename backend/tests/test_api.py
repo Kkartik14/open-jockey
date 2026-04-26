@@ -21,7 +21,7 @@ def test_health(client: TestClient, tmp_aidj) -> None:
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == 1
+    assert body["schema_version"] == 2
     assert body["project_root"] == str(tmp_aidj.project_root)
 
 
@@ -33,6 +33,24 @@ def test_list_plugins_includes_echo(client: TestClient) -> None:
     assert "echo" in by_name
     # version comes from pyproject.toml, not manifest.yaml
     assert by_name["echo"]["version"] == "0.1.0"
+
+
+def test_plugin_info_surfaces_policy_fields(client: TestClient) -> None:
+    """The frontend needs concurrency_safe / default_timeout_sec / cloud_audio
+    to warn users before they hit a 403 on cloud-audio plugins."""
+    r = client.get("/api/plugins")
+    assert r.status_code == 200
+    by_name = {p["name"]: p for p in r.json()}
+
+    echo = by_name["echo"]
+    assert echo["concurrency_safe"] is False
+    assert echo["default_timeout_sec"] == 60.0
+    assert echo["cloud_audio"] is False
+
+    remote = by_name["allin1_remote"]
+    assert remote["concurrency_safe"] is True
+    assert remote["default_timeout_sec"] == 600.0
+    assert remote["cloud_audio"] is True
 
 
 def test_plugin_call_round_trip(client: TestClient) -> None:

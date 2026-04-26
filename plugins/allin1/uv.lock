@@ -43,7 +43,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aidj-plugin-sdk", editable = "../../plugin_sdk" },
-    { name = "allin1", specifier = ">=1.1.0" },
+    { name = "allin1", specifier = "==1.1.0" },
 ]
 
 [[package]]

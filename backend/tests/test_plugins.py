@@ -27,6 +27,46 @@ def test_loaded_manifest_carries_project_dir_and_pyproject_version(tmp_aidj) -> 
     assert lm.version == "0.1.0"
 
 
+def test_concurrency_safe_defaults_to_false(tmp_aidj) -> None:
+    """Existing plugins (echo, allin1) don't set concurrency_safe → False."""
+    by_name = {m.name: m for m in registry().manifests()}
+    assert by_name["echo"].manifest.concurrency_safe is False
+    assert by_name["allin1"].manifest.concurrency_safe is False
+
+
+def test_allin1_remote_manifest_declares_concurrency_safe(tmp_aidj) -> None:
+    """The Modal-backed plugin opts in to concurrency_safe for the future
+    parallelism push."""
+    by_name = {m.name: m for m in registry().manifests()}
+    assert "allin1_remote" in by_name
+    assert by_name["allin1_remote"].manifest.concurrency_safe is True
+    # GPU is 'none' locally — the actual GPU lives on Modal, not on this machine.
+    assert by_name["allin1_remote"].manifest.hardware.gpu == "none"
+
+
+def test_manifest_default_timeout_sec(tmp_aidj) -> None:
+    by_name = {m.name: m for m in registry().manifests()}
+    # Echo doesn't declare it → default of 60.
+    assert by_name["echo"].manifest.default_timeout_sec == 60.0
+    # Heavy analyzers should have generous timeouts.
+    assert by_name["allin1"].manifest.default_timeout_sec == 600.0
+    assert by_name["allin1_remote"].manifest.default_timeout_sec == 600.0
+
+
+def test_plugin_uses_manifest_timeout_by_default(tmp_aidj) -> None:
+    """``Plugin.default_timeout`` should follow the manifest's declared value."""
+    assert registry().get("echo").default_timeout == 60.0
+    assert registry().get("allin1").default_timeout == 600.0
+    assert registry().get("allin1_remote").default_timeout == 600.0
+
+
+def test_cloud_audio_field_defaults(tmp_aidj) -> None:
+    by_name = {m.name: m for m in registry().manifests()}
+    assert by_name["echo"].manifest.cloud_audio is False
+    assert by_name["allin1"].manifest.cloud_audio is False
+    assert by_name["allin1_remote"].manifest.cloud_audio is True
+
+
 def test_info_method_served_by_sdk(tmp_aidj) -> None:
     p = registry().get("echo")
     assert p.call("info") == {"name": "echo", "version": "0.1.0"}

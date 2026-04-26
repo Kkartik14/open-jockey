@@ -34,7 +34,6 @@ log = logging.getLogger(__name__)
 
 _LOG_TAIL_LINES = 30
 _KILL_GRACE_SEC = 2.0
-_DEFAULT_TIMEOUT_SEC = 60.0
 _EOF_SENTINEL: object = None  # pushed onto the queue when the reader sees EOF
 
 
@@ -55,10 +54,17 @@ class Plugin:
         self,
         loaded: LoadedManifest,
         *,
-        default_timeout: float = _DEFAULT_TIMEOUT_SEC,
+        default_timeout: float | None = None,
     ) -> None:
         self._loaded = loaded
-        self.default_timeout = default_timeout
+        # Per-plugin default timeout comes from the manifest. ``default_timeout``
+        # kwarg lets tests / future call sites override; otherwise we use what
+        # the plugin author declared.
+        self.default_timeout = (
+            default_timeout
+            if default_timeout is not None
+            else loaded.manifest.default_timeout_sec
+        )
         self._proc: subprocess.Popen[str] | None = None
         self._log_fp: IO[str] | None = None
         self._log_path: Path | None = None
@@ -209,15 +215,58 @@ class Plugin:
                     tail,
                 )
 
-            resp = json.loads(line)
+            try:
+                resp = json.loads(line)
+            except json.JSONDecodeError as exc:
+                tail = self._tail_log()
+                self._force_kill_locked()
+                raise PluginError(
+                    -32700,
+                    f"plugin '{self.name}' wrote non-JSON to stdout: {line.rstrip()!r}",
+                    tail,
+                ) from exc
+
+            if not isinstance(resp, dict):
+                tail = self._tail_log()
+                self._force_kill_locked()
+                raise PluginError(
+                    -32600,
+                    f"plugin '{self.name}' response is not a JSON object: {type(resp).__name__}",
+                    tail,
+                )
+
+            # The SDK emits ``id=None`` only for parse errors on its own input.
+            # For any *other* id mismatch the response is stale or buggy; tear
+            # the plugin down so subsequent calls can't read leftover lines.
+            resp_id = resp.get("id")
+            if resp_id is not None and resp_id != self._next_id:
+                tail = self._tail_log()
+                self._force_kill_locked()
+                raise PluginError(
+                    -32603,
+                    f"plugin '{self.name}' response id mismatch "
+                    f"(got {resp_id!r}, expected {self._next_id})",
+                    tail,
+                )
+
             if "error" in resp:
-                err = resp["error"]
+                err = resp["error"] if isinstance(resp["error"], dict) else {"message": str(resp["error"])}
                 raise PluginError(
                     err.get("code", -1),
                     err.get("message", "unknown error"),
                     err.get("trace"),
                 )
-            return resp.get("result")
+
+            if "result" not in resp:
+                tail = self._tail_log()
+                self._force_kill_locked()
+                raise PluginError(
+                    -32603,
+                    f"plugin '{self.name}' response has neither 'result' nor 'error'",
+                    tail,
+                )
+
+            return resp["result"]
 
     # -- internals (caller must hold _lock unless noted) -------------------
 

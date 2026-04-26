@@ -1,0 +1,16 @@
+name: allin1_remote
+description: All-in-one analyzer running on a Modal GPU container. Local cost is just network I/O.
+runtime: uv
+python: "3.11"
+entrypoint_module: allin1_remote_plugin
+concurrency_safe: true
+# Heavy upstream + cold-start can be slow on the first call. The host's stricter
+# default would time out before the worker finishes spinning up.
+default_timeout_sec: 600
+# Marks this plugin as one that uploads audio bytes to a non-local service.
+# The analyze API refuses to call it unless AIDJ_ALLOW_CLOUD_AUDIO=1 is set.
+cloud_audio: true
+hardware:
+  cpu_cores: 1
+  ram_mb: 256
+  gpu: none

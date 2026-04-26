@@ -6,6 +6,7 @@ real analyzers (allin1, demucs, etc.).
 """
 from __future__ import annotations
 
+import sys
 import time
 from importlib.metadata import version
 from typing import Any
@@ -47,7 +48,18 @@ def handle(method: str, params: dict[str, Any]) -> Any:
         # Verify the audio_path param is present; we don't actually read the file.
         if "audio_path" not in params:
             raise ValueError("analyze: 'audio_path' is required")
-        return _canned_beat_grid()
+        canned = _canned_beat_grid()
+        # Optional injection point so the host's confidence-coercion can be tested.
+        if "confidence_override" in params:
+            canned["confidence"] = params["confidence_override"]
+        return canned
+    if method == "_misbehave_stdout":
+        # Test hook: write a garbage line to stdout *before* the SDK emits the
+        # response, so the host reads non-JSON on the wire. The host should
+        # detect this, force-kill us, and raise PluginError(-32700).
+        sys.stdout.write("not valid json at all\n")
+        sys.stdout.flush()
+        return {"ok": True}
     raise ValueError(f"unknown method: {method}")
 
 

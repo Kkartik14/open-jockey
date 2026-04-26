@@ -10,6 +10,7 @@ The ``analyze`` method maps allin1's ``AnalysisResult`` onto open-jockey's
 """
 from __future__ import annotations
 
+import tempfile
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,11 @@ _SECTION_LABEL_MAP: dict[str, str] = {
     "build": "drop",
 }
 
+# allin1 emits 'start' and 'end' pseudo-segments at silent track boundaries.
+# They have no musical meaning — drop them so the planner doesn't see them as
+# unknown sections at the head and tail of every track.
+_BOUNDARY_LABELS: frozenset[str] = frozenset({"start", "end"})
+
 # Tolerance for matching downbeats against beats. allin1 returns both arrays
 # from the same source so they should be identical, but float equality across
 # a list comparison is risky; round to microseconds.
@@ -48,7 +54,11 @@ def _normalise_label(raw: str) -> str:
 
 
 def _convert(result: Any) -> dict[str, Any]:
-    """Map an allin1 ``AnalysisResult`` onto BeatGridAnalysis JSON."""
+    """Map an allin1 ``AnalysisResult`` onto BeatGridAnalysis JSON.
+
+    allin1's silence boundary segments (labels 'start' / 'end') are dropped so
+    they don't pollute the section list with synthetic 'unknown' entries.
+    """
     beats = [float(t) for t in result.beats]
     downbeat_set = {round(float(t), _TIME_PRECISION) for t in result.downbeats}
 
@@ -63,6 +73,7 @@ def _convert(result: Any) -> dict[str, Any]:
             "label": _normalise_label(seg.label),
         }
         for seg in result.segments
+        if seg.label.lower().strip() not in _BOUNDARY_LABELS
     ]
     duration = float(sections_out[-1]["end_sec"]) if sections_out else (beats[-1] if beats else 0.0)
 
@@ -83,10 +94,20 @@ def handle(method: str, params: dict[str, Any]) -> Any:
         if not path.is_file():
             raise FileNotFoundError(audio_path)
 
-        results = allin1.analyze([str(path)])
-        if not results:
-            raise RuntimeError("allin1 returned no results")
-        return _convert(results[0])
+        # Run allin1 with a fresh per-call scratch dir so its demix/spec
+        # byproducts can't land in the host cwd or collide across runs. The
+        # tempdir is removed after analyze() returns whether it succeeded or
+        # raised — the with-block cleans up on the way out.
+        with tempfile.TemporaryDirectory(prefix="allin1-") as scratch:
+            results = allin1.analyze(
+                [str(path)],
+                demix_dir=scratch,
+                spec_dir=scratch,
+                keep_byproducts=False,
+            )
+            if not results:
+                raise RuntimeError("allin1 returned no results")
+            return _convert(results[0])
 
     raise ValueError(f"unknown method: {method}")
 

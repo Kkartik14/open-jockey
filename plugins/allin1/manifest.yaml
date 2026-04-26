@@ -3,6 +3,10 @@ description: All-in-one beat, downbeat, tempo, and structure analyzer (mir-aidj)
 runtime: uv
 python: "3.11"
 entrypoint_module: allin1_plugin
+# Local allin1 with torch+demucs is slow (and starting up is even slower the
+# first time, when uv installs the deps). The host's 60s default would
+# guarantee a timeout on the first call.
+default_timeout_sec: 600
 hardware:
   cpu_cores: 4
   ram_mb: 4096

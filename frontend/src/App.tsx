@@ -93,11 +93,30 @@ export default function App() {
               className="flex items-center justify-between gap-4 rounded-md border border-zinc-800 bg-zinc-900/50 px-3 py-2"
             >
               <div>
-                <div className="font-mono text-sm">
+                <div className="flex items-center gap-2 font-mono text-sm">
                   {p.name}
                   <span className="text-zinc-500"> @ {p.version}</span>
+                  {p.cloud_audio && (
+                    <span
+                      className="rounded bg-amber-900/40 px-1.5 py-0.5 text-[10px] text-amber-300"
+                      title="Uploads audio off-machine. Set AIDJ_ALLOW_CLOUD_AUDIO=1 in the backend env to enable."
+                    >
+                      cloud
+                    </span>
+                  )}
+                  {p.concurrency_safe && (
+                    <span
+                      className="rounded bg-emerald-900/40 px-1.5 py-0.5 text-[10px] text-emerald-300"
+                      title="Multiple analyses can run in parallel against this plugin."
+                    >
+                      parallel-safe
+                    </span>
+                  )}
                 </div>
-                <div className="text-xs text-zinc-500">{p.description || "—"}</div>
+                <div className="text-xs text-zinc-500">
+                  {p.description || "—"}
+                  <span className="ml-2 text-zinc-600">timeout {p.default_timeout_sec}s</span>
+                </div>
               </div>
               <button
                 onClick={() => callEcho(p.name)}

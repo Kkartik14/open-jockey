@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -16,7 +17,7 @@ from aidj.config import settings
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 PRAGMA journal_mode = WAL;
@@ -41,6 +42,8 @@ CREATE TABLE IF NOT EXISTS tracks (
 );
 CREATE INDEX IF NOT EXISTS idx_tracks_source_path ON tracks(source_path);
 
+-- claim_token is the per-claim identity used by complete_run/fail_run to
+-- prevent stale terminal writes from overwriting a newer claim's row.
 CREATE TABLE IF NOT EXISTS analysis_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     track_hash TEXT NOT NULL REFERENCES tracks(content_hash) ON DELETE CASCADE,
@@ -52,6 +55,7 @@ CREATE TABLE IF NOT EXISTS analysis_runs (
     error TEXT,
     started_at TEXT,
     finished_at TEXT,
+    claim_token TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (track_hash, analyzer_name, analyzer_version)
 );
@@ -122,6 +126,17 @@ def _connect(path: Path) -> sqlite3.Connection:
 
 
 _conn: sqlite3.Connection | None = None
+# We share a single sqlite3 connection across threads (FastAPI's threadpool +
+# the test suite). sqlite3 allows ``check_same_thread=False`` but a *single*
+# connection cannot interleave statements safely across threads — a
+# non-transaction execute() from one thread can land inside another thread's
+# in-flight transaction. So *every* helper here acquires the same lock.
+#
+# We use ``RLock`` so a thread that's holding the lock for a transaction can
+# still call back into ``execute()`` / ``fetch_*()`` from inside the block
+# without deadlocking itself. (Today no helper does that, but future code
+# might, and the cost is zero.)
+_db_lock = threading.RLock()
 
 
 def get_conn() -> sqlite3.Connection:
@@ -137,23 +152,51 @@ def get_conn() -> sqlite3.Connection:
 
 def _bootstrap(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
+    _migrate_in_place(conn)
     conn.execute(
-        "INSERT OR IGNORE INTO schema_meta(key, value) VALUES (?, ?)",
+        "INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)",
         ("schema_version", str(SCHEMA_VERSION)),
     )
 
 
+def _migrate_in_place(conn: sqlite3.Connection) -> None:
+    """Best-effort, idempotent migration for shapes the schema script can't add.
+
+    SQLite's ``CREATE TABLE IF NOT EXISTS`` is no-op when the table already
+    exists, so a column added to a later schema version won't appear in an old
+    DB. Detect-and-add is enough for the scale we're at; full migration
+    plumbing arrives if/when it's actually needed.
+    """
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(analysis_runs)")}
+    if "claim_token" not in cols:
+        log.info("migrating analysis_runs: adding claim_token column")
+        conn.execute("ALTER TABLE analysis_runs ADD COLUMN claim_token TEXT")
+
+
 @contextmanager
-def transaction() -> Iterator[sqlite3.Connection]:
+def transaction(*, immediate: bool = False) -> Iterator[sqlite3.Connection]:
+    """Run a block in a transaction.
+
+    ``immediate=True`` issues ``BEGIN IMMEDIATE``, which acquires SQLite's write
+    lock at the start of the transaction rather than at first write. Use this
+    for atomic claim-style operations (read-then-conditionally-write) where a
+    deferred transaction would leave a TOCTOU window between the SELECT and the
+    INSERT/UPDATE.
+
+    Across threads, the module-level ``_db_lock`` (an ``RLock``) serialises
+    every shared-connection statement, so concurrent ``BEGIN``/``execute``
+    calls cannot interleave on the shared sqlite3 connection.
+    """
     conn = get_conn()
-    conn.execute("BEGIN")
-    try:
-        yield conn
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
-    else:
-        conn.execute("COMMIT")
+    with _db_lock:
+        conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+        try:
+            yield conn
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        else:
+            conn.execute("COMMIT")
 
 
 def reset_for_tests(db_path: Path) -> None:
@@ -174,17 +217,22 @@ def close() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Query helpers
+# Query helpers — every entry point holds ``_db_lock`` so non-transaction
+# statements cannot interleave with an in-flight transaction on the shared
+# connection.
 # ---------------------------------------------------------------------------
 
 
 def fetch_one(sql: str, params: tuple[Any, ...] = ()) -> sqlite3.Row | None:
-    return get_conn().execute(sql, params).fetchone()
+    with _db_lock:
+        return get_conn().execute(sql, params).fetchone()
 
 
 def fetch_all(sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
-    return get_conn().execute(sql, params).fetchall()
+    with _db_lock:
+        return get_conn().execute(sql, params).fetchall()
 
 
 def execute(sql: str, params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
-    return get_conn().execute(sql, params)
+    with _db_lock:
+        return get_conn().execute(sql, params)
