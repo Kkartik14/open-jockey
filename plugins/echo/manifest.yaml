@@ -1,5 +1,4 @@
 name: echo
-version: 0.1.0
 description: Trivial echo plugin — RPC smoke test
 runtime: uv
 python: "3.11"

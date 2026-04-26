@@ -4,12 +4,14 @@ A manifest is a YAML file at the root of each plugin describing how to launch it
 and what it provides. The runtime reads manifests at discovery time and uses them
 to spawn the plugin in its own uv-managed venv.
 
-``Manifest`` is the on-disk shape (immutable). ``LoadedManifest`` pairs a manifest
-with the resolved directory it lives in — this avoids mutating a Pydantic model
-post-construction.
+``Manifest`` is the on-disk YAML shape (immutable). ``LoadedManifest`` pairs a
+manifest with the resolved directory it lives in *and* the version read from
+the plugin's own ``pyproject.toml`` — that's the single source of truth for a
+plugin's version, so manifest YAML and ``__init__.py`` constants can't drift.
 """
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Self
@@ -27,12 +29,11 @@ class Hardware(BaseModel):
 
 
 class Manifest(BaseModel):
-    """The contents of ``manifest.yaml``."""
+    """The contents of ``manifest.yaml``. Version comes from pyproject, not here."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
-    version: str
     description: str = ""
     runtime: Literal["uv"] = "uv"
     python: str = "3.11"
@@ -45,26 +46,40 @@ class Manifest(BaseModel):
 
 @dataclass(frozen=True)
 class LoadedManifest:
-    """A discovered manifest paired with its source directory."""
+    """A discovered manifest paired with its source directory and resolved version."""
 
     manifest: Manifest
     project_dir: Path
+    version: str
 
     @classmethod
     def load(cls, plugin_dir: Path) -> Self:
         yaml_path = plugin_dir / "manifest.yaml"
+        pyproject_path = plugin_dir / "pyproject.toml"
         if not yaml_path.is_file():
             raise FileNotFoundError(f"missing manifest: {yaml_path}")
-        data = yaml.safe_load(yaml_path.read_text())
+        if not pyproject_path.is_file():
+            raise FileNotFoundError(
+                f"plugin needs a pyproject.toml (used as the version source): {pyproject_path}"
+            )
+
+        manifest = Manifest.model_validate(yaml.safe_load(yaml_path.read_text()))
+
+        with pyproject_path.open("rb") as f:
+            pyproject = tomllib.load(f)
+        version = pyproject.get("project", {}).get("version")
+        if not isinstance(version, str) or not version:
+            raise ValueError(
+                f"missing or invalid [project].version in {pyproject_path}; "
+                "the plugin's pyproject is the single source of truth for version"
+            )
+
         return cls(
-            manifest=Manifest.model_validate(data),
+            manifest=manifest,
             project_dir=plugin_dir.resolve(),
+            version=version,
         )
 
     @property
     def name(self) -> str:
         return self.manifest.name
-
-    @property
-    def version(self) -> str:
-        return self.manifest.version

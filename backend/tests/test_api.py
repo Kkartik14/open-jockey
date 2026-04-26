@@ -1,6 +1,7 @@
 """FastAPI surface — exercised through TestClient without a real network."""
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,7 @@ from aidj.api.main import app
 
 
 @pytest.fixture
-def client(tmp_aidj) -> TestClient:
+def client(tmp_aidj) -> Iterator[TestClient]:
     with TestClient(app) as c:
         yield c
 
@@ -27,8 +28,11 @@ def test_health(client: TestClient, tmp_aidj) -> None:
 def test_list_plugins_includes_echo(client: TestClient) -> None:
     r = client.get("/api/plugins")
     assert r.status_code == 200
-    names = [p["name"] for p in r.json()]
-    assert "echo" in names
+    plugins = r.json()
+    by_name = {p["name"]: p for p in plugins}
+    assert "echo" in by_name
+    # version comes from pyproject.toml, not manifest.yaml
+    assert by_name["echo"]["version"] == "0.1.0"
 
 
 def test_plugin_call_round_trip(client: TestClient) -> None:
@@ -38,6 +42,17 @@ def test_plugin_call_round_trip(client: TestClient) -> None:
     )
     assert r.status_code == 200
     assert r.json() == {"result": {"echo": {"hi": "there"}}}
+
+
+def test_plugin_call_timeout_returns_504(client: TestClient) -> None:
+    r = client.post(
+        "/api/plugins/echo/call",
+        json={"method": "sleep", "params": {"seconds": 5}, "timeout": 0.3},
+    )
+    assert r.status_code == 504
+    detail = r.json()["detail"]
+    assert detail["code"] == -32001
+    assert "timed out" in detail["message"].lower()
 
 
 def test_unknown_plugin_returns_404(client: TestClient) -> None:

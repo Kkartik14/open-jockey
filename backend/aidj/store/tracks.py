@@ -12,26 +12,32 @@ from aidj.store.models import Track
 log = logging.getLogger(__name__)
 
 
-_INSERT_FIELDS_BASE: tuple[str, ...] = (
-    "content_hash",
-    "source_path",
-    "file_size",
-    "format",
-    "duration_sec",
-    "sample_rate",
-    "channels",
-    "bitrate",
+# Keys callers may pass via ``probe`` to enrich a track. Anything else (including
+# attempts to override identity columns like content_hash/source_path) is rejected.
+_PROBE_ALLOWED_KEYS: frozenset[str] = frozenset(
+    {"duration_sec", "sample_rate", "channels", "bitrate"}
 )
 
 
 def ingest(path: Path | str, *, probe: dict[str, Any] | None = None) -> Track:
     """Hash a file and upsert it into the tracks table.
 
-    ``probe`` may carry duration/sample_rate/etc. from a future audio probe step.
+    ``probe`` may carry duration/sample_rate/channels/bitrate from a future
+    audio-probe step. Other keys are rejected — including identity columns
+    (``content_hash``/``source_path``/``file_size``/``format``), which the
+    repository owns.
     """
     p = Path(path).resolve()
     if not p.is_file():
         raise FileNotFoundError(p)
+
+    if probe:
+        bad = set(probe) - _PROBE_ALLOWED_KEYS
+        if bad:
+            raise ValueError(
+                f"probe contains keys that are not allowed: {sorted(bad)}; "
+                f"allowed: {sorted(_PROBE_ALLOWED_KEYS)}"
+            )
 
     fields: dict[str, Any] = {
         "content_hash": hash_file(p),
@@ -52,7 +58,12 @@ def ingest(path: Path | str, *, probe: dict[str, Any] | None = None) -> Track:
         f"ON CONFLICT(content_hash) DO UPDATE SET {update_clause}, last_seen=datetime('now')",
         tuple(fields.values()),
     )
-    log.debug("ingested track %s (%s, %d bytes)", fields["content_hash"][:12], fields["format"], fields["file_size"])
+    log.debug(
+        "ingested track %s (%s, %d bytes)",
+        fields["content_hash"][:12],
+        fields["format"],
+        fields["file_size"],
+    )
 
     track = get(fields["content_hash"])
     if track is None:  # pragma: no cover — INSERT just succeeded

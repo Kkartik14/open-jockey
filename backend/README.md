@@ -81,6 +81,7 @@ The `tmp_aidj` fixture in `tests/conftest.py` builds a fully-isolated environmen
 | `AIDJ_PROJECT_ROOT` | walks up from cwd looking for `.aidj/` then `.git`, falls back to cwd | repo root |
 | `AIDJ_STORE_DIRNAME` | `.aidj` | runtime data dir under project root |
 | `AIDJ_PLUGINS_DIRNAME` | `plugins` | where plugin manifests live |
+| `AIDJ_UV_CACHE_DIR` | `<store_root>/uv-cache` | uv cache used when spawning plugin subprocesses (sandbox-friendly default; override to share with `~/.cache/uv`) |
 | `AIDJ_LOG_LEVEL` | `INFO` | DEBUG / INFO / WARNING / ERROR |
 
 ## API surface

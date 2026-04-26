@@ -4,11 +4,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from aidj.store import cache, jobs, tracks
 from aidj.store.hashing import derivation_key, hash_bytes, hash_file
 from aidj.store.models import Job, JobStatus, Track
-
 
 # -----------------------------
 # hashing
@@ -65,9 +65,31 @@ def test_track_ingest_rejects_directory(tmp_aidj, tmp_path: Path) -> None:
 def test_track_returned_is_pydantic_model(tmp_aidj, sample_file: Path) -> None:
     t = tracks.ingest(sample_file)
     assert isinstance(t, Track)
-    # frozen
-    with pytest.raises(Exception):
+    # frozen — mutation raises ValidationError, not generic Exception
+    with pytest.raises(ValidationError):
         t.content_hash = "x"  # type: ignore[misc]
+
+
+def test_track_probe_allows_whitelisted_keys(tmp_aidj, sample_file: Path) -> None:
+    t = tracks.ingest(
+        sample_file,
+        probe={"duration_sec": 123.4, "sample_rate": 44100, "channels": 2, "bitrate": 320},
+    )
+    assert t.duration_sec == 123.4
+    assert t.sample_rate == 44100
+    assert t.channels == 2
+    assert t.bitrate == 320
+
+
+def test_track_probe_rejects_unknown_keys(tmp_aidj, sample_file: Path) -> None:
+    with pytest.raises(ValueError, match="not allowed"):
+        tracks.ingest(sample_file, probe={"unknown_column": 1})
+
+
+def test_track_probe_cannot_override_identity_fields(tmp_aidj, sample_file: Path) -> None:
+    for key in ("content_hash", "source_path", "file_size", "format"):
+        with pytest.raises(ValueError, match="not allowed"):
+            tracks.ingest(sample_file, probe={key: "spoofed"})
 
 
 # -----------------------------
@@ -106,14 +128,12 @@ def test_job_retry_then_terminal_failure(tmp_aidj) -> None:
     j = jobs.claim_next("flaky")
     assert j is not None
 
-    # First failure → requeued
     jobs.fail(j.id, "boom")
     after_first = jobs.get(jid)
     assert after_first is not None
     assert after_first.status is JobStatus.QUEUED
     assert after_first.retries == 1
 
-    # Second failure → terminal
     j2 = jobs.claim_next("flaky")
     assert j2 is not None
     jobs.fail(j2.id, "boom2")

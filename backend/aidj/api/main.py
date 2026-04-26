@@ -51,6 +51,11 @@ class PluginInfo(BaseModel):
 class PluginCallRequest(BaseModel):
     method: str
     params: dict[str, Any] = Field(default_factory=dict)
+    timeout: float | None = Field(
+        default=None,
+        gt=0,
+        description="Per-call timeout in seconds. None → plugin default.",
+    )
 
 
 class PluginCallResponse(BaseModel):
@@ -141,14 +146,16 @@ def call_plugin(name: str, body: PluginCallRequest) -> PluginCallResponse:
     try:
         plugin = registry().get(name)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     try:
-        result = plugin.call(body.method, body.params)
+        result = plugin.call(body.method, body.params, timeout=body.timeout)
     except PluginError as exc:
+        # Map runtime errors to HTTP. -32001 = timeout → 504; others → 500.
+        status_code = 504 if exc.code == -32001 else 500
         raise HTTPException(
-            status_code=500,
-            detail={"code": exc.code, "message": str(exc), "trace": exc.trace},
-        )
+            status_code=status_code,
+            detail={"code": exc.code, "message": exc.message, "trace": exc.trace},
+        ) from exc
     return PluginCallResponse(result=result)
 
 
@@ -177,7 +184,9 @@ def list_tracks(limit: int = Query(1000, ge=1, le=10_000)) -> list[Track]:
 
 @app.post("/api/jobs", response_model=EnqueueResponse)
 def enqueue_job(body: EnqueueRequest) -> EnqueueResponse:
-    return EnqueueResponse(id=jobs.enqueue(body.kind, body.payload, max_retries=body.max_retries))
+    return EnqueueResponse(
+        id=jobs.enqueue(body.kind, body.payload, max_retries=body.max_retries),
+    )
 
 
 @app.get("/api/jobs", response_model=list[Job])

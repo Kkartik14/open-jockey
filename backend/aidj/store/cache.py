@@ -10,6 +10,7 @@ caches.
 """
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -76,8 +77,6 @@ def delete(kind: str, key: str, filename: str | None = None) -> int:
         if child.is_file():
             child.unlink()
             count += 1
-    try:
+    with contextlib.suppress(OSError):
         parent.rmdir()
-    except OSError:
-        pass
     return count

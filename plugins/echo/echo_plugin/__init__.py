@@ -1,3 +1,1 @@
-"""Echo plugin package."""
-
-VERSION = "0.1.0"
+"""Echo plugin package. Version comes from ``importlib.metadata``."""

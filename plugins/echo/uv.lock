@@ -3,6 +3,17 @@ revision = 1
 requires-python = ">=3.11"
 
 [[package]]
+name = "aidj-plugin-sdk"
+version = "0.1.0"
+source = { editable = "../../plugin_sdk" }
+
+[[package]]
 name = "echo-plugin"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "aidj-plugin-sdk" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "aidj-plugin-sdk", editable = "../../plugin_sdk" }]

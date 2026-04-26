@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     project_root: Path = Field(default_factory=_default_project_root)
     store_dirname: str = ".aidj"
     plugins_dirname: str = "plugins"
+    # Override the default uv cache location. None → ``store_root/uv-cache``.
+    # Set via ``AIDJ_UV_CACHE_DIR`` or directly in tests.
+    uv_cache_dir: Path | None = None
 
     @property
     def store_root(self) -> Path:
@@ -59,8 +62,20 @@ class Settings(BaseSettings):
     def plugins_root(self) -> Path:
         return self.project_root / self.plugins_dirname
 
+    @property
+    def uv_cache_root(self) -> Path:
+        return self.uv_cache_dir if self.uv_cache_dir is not None else (self.store_root / "uv-cache")
+
     def ensure_dirs(self) -> None:
-        for d in (self.store_root, self.cache_root, self.models_root, self.logs_root, self.projects_root):
+        dirs = (
+            self.store_root,
+            self.cache_root,
+            self.models_root,
+            self.logs_root,
+            self.projects_root,
+            self.uv_cache_root,
+        )
+        for d in dirs:
             d.mkdir(parents=True, exist_ok=True)
 
 
