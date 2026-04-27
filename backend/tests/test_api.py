@@ -3,11 +3,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from aidj.api.main import app
+from aidj.store import tracks
 
 
 @pytest.fixture
@@ -110,3 +112,113 @@ def test_job_enqueue_and_list(client: TestClient) -> None:
 def test_job_status_filter_validates_enum(client: TestClient) -> None:
     r = client.get("/api/jobs", params={"status": "bogus"})
     assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Audio streaming endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_audio_stream_returns_file_with_octet_stream_for_unknown_ext(
+    client: TestClient, sample_file: Path
+) -> None:
+    """The fixture file has a .bin extension → not a known audio type → falls
+    back to application/octet-stream. The bytes still come through."""
+    track = tracks.ingest(sample_file)
+    r = client.get(f"/api/tracks/{track.content_hash}/audio")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/octet-stream"
+    assert r.content == sample_file.read_bytes()
+
+
+def test_audio_stream_uses_audio_content_type_for_known_extension(
+    client: TestClient, tmp_path: Path
+) -> None:
+    p = tmp_path / "song.mp3"
+    p.write_bytes(b"ID3\x04\x00fake-but-routable")
+    track = tracks.ingest(p)
+    r = client.get(f"/api/tracks/{track.content_hash}/audio")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("audio/mpeg")
+
+
+def test_audio_stream_404_when_hash_unknown(client: TestClient) -> None:
+    r = client.get("/api/tracks/" + ("0" * 64) + "/audio")
+    assert r.status_code == 404
+
+
+def test_audio_stream_410_when_source_file_missing(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Track was ingested but the source file is gone now → 410 Gone, not 500."""
+    p = tmp_path / "song.wav"
+    p.write_bytes(b"RIFF\x00\x00\x00\x00WAVEfmt-fake")
+    track = tracks.ingest(p)
+    p.unlink()
+    r = client.get(f"/api/tracks/{track.content_hash}/audio")
+    assert r.status_code == 410
+    assert "no longer present" in r.json()["detail"]
+
+
+def test_audio_stream_uses_inline_content_disposition(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Browsers should play the file, not download it."""
+    p = tmp_path / "song.mp3"
+    p.write_bytes(b"ID3\x04\x00fake-but-routable")
+    track = tracks.ingest(p)
+    r = client.get(f"/api/tracks/{track.content_hash}/audio")
+    assert r.status_code == 200
+    disp = r.headers.get("content-disposition", "")
+    # FastAPI / Starlette emits "inline; filename=..." when content_disposition_type='inline'.
+    assert disp.startswith("inline"), f"expected inline disposition, got: {disp!r}"
+
+
+# ---------------------------------------------------------------------------
+# Single-track endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_get_track_returns_track(client: TestClient, sample_file: Path) -> None:
+    track = tracks.ingest(sample_file)
+    r = client.get(f"/api/tracks/{track.content_hash}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["content_hash"] == track.content_hash
+    assert body["source_path"] == track.source_path
+
+
+def test_get_track_404_for_unknown(client: TestClient) -> None:
+    r = client.get("/api/tracks/" + ("0" * 64))
+    assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Peaks endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_peaks_404_for_unknown_track(client: TestClient) -> None:
+    r = client.get("/api/tracks/" + ("0" * 64) + "/peaks")
+    assert r.status_code == 404
+
+
+def test_peaks_410_when_source_missing(client: TestClient, tmp_path: Path) -> None:
+    p = tmp_path / "song.wav"
+    p.write_bytes(b"RIFF\x00\x00\x00\x00WAVEfmt-fake")
+    track = tracks.ingest(p)
+    p.unlink()
+    r = client.get(f"/api/tracks/{track.content_hash}/peaks")
+    assert r.status_code == 410
+
+
+def test_peaks_503_when_ffmpeg_unavailable(
+    client: TestClient, sample_file: Path
+) -> None:
+    from aidj.audio import peaks as audio_peaks
+
+    track = tracks.ingest(sample_file)
+    with patch.object(audio_peaks, "is_ffmpeg_available", return_value=False):
+        r = client.get(f"/api/tracks/{track.content_hash}/peaks")
+    assert r.status_code == 503
+    assert "ffmpeg" in r.json()["detail"].lower()

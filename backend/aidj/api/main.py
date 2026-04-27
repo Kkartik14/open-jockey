@@ -15,9 +15,11 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from aidj import __version__
+from aidj.audio import peaks as audio_peaks
 from aidj.config import settings
 from aidj.plugins.manifest import Hardware
 from aidj.plugins.registry import registry
@@ -29,6 +31,22 @@ CLOUD_AUDIO_OPT_IN_ENV = "AIDJ_ALLOW_CLOUD_AUDIO"
 # RUNNING rows older than ``2 * default_timeout`` are treated as stale (the
 # backend probably crashed mid-run); the next analyze call auto-recovers.
 _STALE_TIMEOUT_MULTIPLIER = 2.0
+
+# Used by the audio-streaming endpoint to set Content-Type from the file's
+# extension. Anything not in this map falls back to ``application/octet-stream``
+# (browsers usually figure it out from the byte stream anyway).
+_AUDIO_MEDIA_TYPES: dict[str, str] = {
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+    "flac": "audio/flac",
+    "m4a": "audio/mp4",
+    "aac": "audio/aac",
+    "ogg": "audio/ogg",
+    "opus": "audio/ogg",
+    "aif": "audio/aiff",
+    "aiff": "audio/aiff",
+    "wma": "audio/x-ms-wma",
+}
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +101,12 @@ class EnqueueRequest(BaseModel):
 
 class EnqueueResponse(BaseModel):
     id: int
+
+
+class PeaksResponse(BaseModel):
+    duration_sec: float
+    samples: int
+    peaks: list[float]
 
 
 class AnalyzeRequest(BaseModel):
@@ -196,6 +220,83 @@ def ingest_track(body: IngestRequest) -> Track:
 @app.get("/api/tracks", response_model=list[Track])
 def list_tracks(limit: int = Query(1000, ge=1, le=10_000)) -> list[Track]:
     return tracks.list_all(limit=limit)
+
+
+@app.get("/api/tracks/{content_hash}", response_model=Track)
+def get_track(content_hash: str) -> Track:
+    t = tracks.get(content_hash)
+    if t is None:
+        raise HTTPException(status_code=404, detail=f"track not found: {content_hash}")
+    return t
+
+
+@app.get("/api/tracks/{content_hash}/audio")
+def stream_track_audio(content_hash: str) -> FileResponse:
+    """Stream the source audio for a track so the frontend's waveform / player
+    can pull it without the user having to open file URLs.
+
+    - 404 if the hash isn't in the store
+    - 410 (Gone) if the row exists but the file's been moved/deleted on disk
+    - Otherwise streams via Starlette's ``FileResponse`` with
+      ``Content-Disposition: inline`` so browsers play instead of downloading.
+      Range requests are honoured automatically (seek + buffered playback).
+    """
+    track = tracks.get(content_hash)
+    if track is None:
+        raise HTTPException(status_code=404, detail=f"track not found: {content_hash}")
+    p = Path(track.source_path)
+    if not p.is_file():
+        raise HTTPException(
+            status_code=410,
+            detail=f"source file no longer present at {track.source_path}",
+        )
+    suffix = p.suffix.lstrip(".").lower()
+    media_type = _AUDIO_MEDIA_TYPES.get(suffix, "application/octet-stream")
+    # ``inline`` so browsers play instead of downloading. We pass ``filename``
+    # so Starlette actually emits the header (without it, the disposition is
+    # omitted entirely) and so a manual save-as gets the right filename.
+    return FileResponse(
+        p,
+        media_type=media_type,
+        filename=p.name,
+        content_disposition_type="inline",
+    )
+
+
+@app.get("/api/tracks/{content_hash}/peaks", response_model=PeaksResponse)
+def get_track_peaks(
+    content_hash: str,
+    samples: int = Query(2048, ge=64, le=10_000),
+) -> PeaksResponse:
+    """Return precomputed waveform peaks (and duration) for a track.
+
+    The frontend uses this to render the waveform without fetching the entire
+    audio file. Per (track_hash, samples) the result is cached in the project
+    store so subsequent calls are essentially free.
+
+    - 404 if the hash isn't in the store
+    - 410 if the source file is gone
+    - 503 if ffmpeg/ffprobe aren't available or the decode fails
+    """
+    track = tracks.get(content_hash)
+    if track is None:
+        raise HTTPException(status_code=404, detail=f"track not found: {content_hash}")
+    p = Path(track.source_path)
+    if not p.is_file():
+        raise HTTPException(
+            status_code=410,
+            detail=f"source file no longer present at {track.source_path}",
+        )
+    try:
+        data = audio_peaks.get_or_compute_peaks(track.content_hash, p, samples=samples)
+    except audio_peaks.PeaksError as exc:
+        raise HTTPException(status_code=503, detail=f"could not compute peaks: {exc}") from exc
+
+    return PeaksResponse(
+        duration_sec=data.duration_sec,
+        samples=data.samples,
+        peaks=data.peaks,
+    )
 
 
 # ---------------------------------------------------------------------------

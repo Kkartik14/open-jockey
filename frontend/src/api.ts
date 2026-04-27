@@ -40,6 +40,25 @@ export type Job = {
   result: unknown;
 };
 
+export type Peaks = {
+  duration_sec: number;
+  samples: number;
+  peaks: number[];
+};
+
+export type AnalysisRun = {
+  id: number;
+  track_hash: string;
+  analyzer_name: string;
+  analyzer_version: string;
+  status: "pending" | "running" | "completed" | "failed";
+  output: Record<string, unknown> | null;
+  confidence: number | null;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     headers: { "Content-Type": "application/json" },
@@ -66,6 +85,22 @@ export const api = {
       body: JSON.stringify({ path }),
     }),
   listTracks: () => req<Track[]>("/tracks"),
+  getTrack: (hash: string) => req<Track>(`/tracks/${hash}`),
+  /** Streaming URL the <audio> element can point at directly (range-served). */
+  audioUrl: (hash: string) => `/api/tracks/${hash}/audio`,
+  /** Precomputed peaks + duration so WaveSurfer doesn't decode the whole audio. */
+  getPeaks: (hash: string, samples = 2048) =>
+    req<Peaks>(`/tracks/${hash}/peaks?samples=${samples}`),
+  analyzeTrack: (
+    hash: string,
+    analyzer: string,
+    body: { force?: boolean; timeout?: number | null } = {},
+  ) =>
+    req<AnalysisRun>(`/tracks/${hash}/analyze/${analyzer}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  listAnalyses: (hash: string) => req<AnalysisRun[]>(`/tracks/${hash}/analyses`),
   enqueueJob: (kind: string, payload: unknown = {}) =>
     req<{ id: number }>("/jobs", {
       method: "POST",
