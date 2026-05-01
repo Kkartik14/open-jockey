@@ -372,8 +372,17 @@ def get_completed(
 
 
 def list_for_track(track_hash: str) -> list[AnalysisRun]:
+    """Return runs for a track, **most recent first** across all analyzers.
+
+    We order by ``started_at`` (which is rewritten on every claim — including
+    forced reruns — unlike ``created_at`` which sticks to the first INSERT) and
+    tie-break by id so a re-run still surfaces above a previous run with the
+    same timestamp. ``COALESCE`` covers admin-inserted rows that never went
+    through ``claim_running`` and lack a ``started_at``.
+    """
     rows = db.fetch_all(
-        "SELECT * FROM analysis_runs WHERE track_hash=? ORDER BY analyzer_name, created_at DESC",
+        "SELECT * FROM analysis_runs WHERE track_hash=? "
+        "ORDER BY COALESCE(started_at, created_at) DESC, id DESC",
         (track_hash,),
     )
     return [AnalysisRun.from_row(r) for r in rows]

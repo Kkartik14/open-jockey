@@ -1,0 +1,33 @@
+[project]
+name = "madmom-msaf-plugin"
+version = "0.1.0"
+description = "Bake-off counterpart for allin1 — madmom beats/downbeats + MSAF sections"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "aidj-plugin-sdk",
+    # Cython + numpy must be present at madmom's *build* time. We pre-declare
+    # them as runtime deps so they end up in the env, then disable build
+    # isolation for madmom so its setup.py can import them.
+    "Cython",
+    "numpy<2",
+    # madmom is unmaintained (last release 0.16.1, 2018). On modern Python
+    # this combination is the only reliable way to coax it into building.
+    "madmom>=0.16.1",
+    # MSAF for structure boundaries.
+    "msaf>=0.1.80",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["madmom_msaf_plugin"]
+
+[tool.uv]
+# madmom's setup.py imports Cython at the top level — without this it picks an
+# isolated build env that doesn't have Cython available.
+no-build-isolation-package = ["madmom"]
+
+[tool.uv.sources]
+aidj-plugin-sdk = { path = "../../plugin_sdk", editable = true }

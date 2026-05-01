@@ -1,0 +1,22 @@
+[project]
+name = "essentia-plugin"
+version = "0.1.0"
+description = "essentia key-detection plugin for open-jockey"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "aidj-plugin-sdk",
+    # essentia is published only as pre-release wheels on PyPI (the project hasn't
+    # cut a 2.1 final). Match the pre-release explicitly so uv's resolver doesn't
+    # exclude them; pin the exact dev tag for reproducibility.
+    "essentia==2.1b6.dev1389",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["essentia_plugin"]
+
+[tool.uv.sources]
+aidj-plugin-sdk = { path = "../../plugin_sdk", editable = true }

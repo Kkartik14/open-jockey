@@ -57,6 +57,30 @@ export type AnalysisRun = {
   error: string | null;
   started_at: string | null;
   finished_at: string | null;
+  /**
+   * Verification labels — populated by ``/api/tracks/{hash}/analyses`` (which
+   * returns the ``AnalysisRunDetail`` shape on the backend). Absent on the
+   * single-run endpoint and immediately after a fresh ``analyzeTrack`` call.
+   */
+  labels?: AnalysisLabel[];
+};
+
+export type AnalysisLabelKind =
+  | "correct"
+  | "half_time"
+  | "double_time"
+  | "wrong_downbeat_phase"
+  | "early_by_ms"
+  | "late_by_ms"
+  | "wrong_section_labels"
+  | "unusable";
+
+export type AnalysisLabel = {
+  id: number;
+  analysis_run_id: number;
+  kind: AnalysisLabelKind;
+  notes: string | null;
+  created_at: string | null;
 };
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -101,6 +125,19 @@ export const api = {
       body: JSON.stringify(body),
     }),
   listAnalyses: (hash: string) => req<AnalysisRun[]>(`/tracks/${hash}/analyses`),
+  listLabels: (runId: number) =>
+    req<AnalysisLabel[]>(`/analyses/${runId}/labels`),
+  addLabel: (runId: number, kind: AnalysisLabelKind, notes?: string) =>
+    req<AnalysisLabel>(`/analyses/${runId}/labels`, {
+      method: "POST",
+      body: JSON.stringify({ kind, notes }),
+    }),
+  deleteLabel: (runId: number, labelId: number) =>
+    fetch(`/api/analyses/${runId}/labels/${labelId}`, { method: "DELETE" }).then(
+      (r) => {
+        if (!r.ok && r.status !== 204) throw new Error(`${r.status} ${r.statusText}`);
+      },
+    ),
   enqueueJob: (kind: string, payload: unknown = {}) =>
     req<{ id: number }>("/jobs", {
       method: "POST",

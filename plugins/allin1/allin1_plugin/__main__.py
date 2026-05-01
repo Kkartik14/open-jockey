@@ -7,6 +7,12 @@ demucs + allin1; downloading the model weights takes another few hundred MB.
 The ``analyze`` method maps allin1's ``AnalysisResult`` onto open-jockey's
 ``BeatGridAnalysis`` schema. Section labels are normalised to
 ``SectionLabel`` values.
+
+Heavy import (``allin1`` itself) is deferred until ``analyze`` is actually
+called. That way the SDK loop starts cleanly and the reserved ``info`` /
+``ping`` methods stay answerable even when the analyzer's deps are broken
+(e.g. allin1's transitive ``madmom`` dependency failing to install) — the
+host can still discover the plugin and probe its health.
 """
 from __future__ import annotations
 
@@ -14,8 +20,6 @@ import tempfile
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
-
-import allin1  # type: ignore[import-untyped]
 
 from aidj_plugin_sdk import serve
 
@@ -87,6 +91,11 @@ def _convert(result: Any) -> dict[str, Any]:
 
 def handle(method: str, params: dict[str, Any]) -> Any:
     if method == "analyze":
+        # Heavy import lives here so a broken allin1/madmom install only
+        # surfaces on real analyze calls, not at process start (where it
+        # would also kill ping/info).
+        import allin1  # type: ignore[import-untyped]
+
         audio_path = params.get("audio_path")
         if not audio_path:
             raise ValueError("analyze: 'audio_path' is required")

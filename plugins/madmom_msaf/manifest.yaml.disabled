@@ -1,0 +1,10 @@
+name: madmom_msaf
+description: Beat / downbeat (madmom) + structure segmentation (MSAF). Experimental.
+runtime: uv
+python: "3.11"
+entrypoint_module: madmom_msaf_plugin
+default_timeout_sec: 600
+hardware:
+  cpu_cores: 2
+  ram_mb: 1024
+  gpu: none

@@ -1,0 +1,1 @@
+"""essentia key-detection plugin."""

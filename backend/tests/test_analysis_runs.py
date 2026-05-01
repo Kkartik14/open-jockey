@@ -41,6 +41,39 @@ def test_upsert_inserts_then_updates_in_place(tmp_aidj, ingested_track) -> None:
     assert completed.confidence == 0.9
 
 
+def test_list_for_track_orders_by_most_recent_started(tmp_aidj, ingested_track) -> None:
+    """list_for_track must return most-recent-first across all analyzers, not
+    alphabetically.
+
+    Crucially we make the *older* run alphabetically-first and the *newer* run
+    alphabetically-last — under the old ``ORDER BY analyzer_name, created_at
+    DESC`` the older run would still come first. Only the new
+    ``ORDER BY started_at DESC, id DESC`` correctly puts the newer one first.
+    """
+    older = analysis_runs.upsert(
+        track_hash=ingested_track.content_hash,
+        analyzer_name="aaa_alphabetically_first",
+        analyzer_version="0.1.0",
+        status=AnalysisStatus.COMPLETED,
+        output={"ok": True},
+        started_at="2026-01-01 00:00:00",
+        finished_at="2026-01-01 00:00:01",
+    )
+    newer = analysis_runs.upsert(
+        track_hash=ingested_track.content_hash,
+        analyzer_name="zzz_alphabetically_last",
+        analyzer_version="0.1.0",
+        status=AnalysisStatus.COMPLETED,
+        output={"ok": True},
+        started_at="2026-04-28 00:00:00",
+        finished_at="2026-04-28 00:00:01",
+    )
+    runs = analysis_runs.list_for_track(ingested_track.content_hash)
+    # The newer run wins despite being alphabetically *last*.
+    assert runs[0].id == newer.id
+    assert runs[1].id == older.id
+
+
 def test_different_versions_create_separate_rows(tmp_aidj, ingested_track) -> None:
     a = analysis_runs.upsert(
         track_hash=ingested_track.content_hash,

@@ -23,7 +23,7 @@ def test_health(client: TestClient, tmp_aidj) -> None:
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == 2
+    assert body["schema_version"] == 3
     assert body["project_root"] == str(tmp_aidj.project_root)
 
 

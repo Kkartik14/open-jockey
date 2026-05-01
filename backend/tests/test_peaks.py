@@ -79,6 +79,63 @@ def test_extract_peaks_respects_samples_target(tmp_path: Path) -> None:
 
 
 @needs_ffmpeg
+def test_extract_peaks_never_exceeds_requested_samples(tmp_path: Path) -> None:
+    """Regression for floor-vs-ceil bucket sizing: short audio at ``samples``
+    targets that don't divide cleanly used to over-bucket (e.g. 8000 PCM /
+    samples=2048 → bucket_size=3 → 2666 buckets > 2048)."""
+    p = tmp_path / "song.wav"
+    _make_test_wav(p, duration_sec=1.0, sample_rate=8000)  # exactly 8000 PCM samples
+    for target in [64, 256, 1024, 2048, 5000]:
+        data = audio_peaks.extract_peaks(p, samples=target)
+        assert data.samples <= target, (
+            f"asked for {target} buckets, got {data.samples}"
+        )
+
+
+@needs_ffmpeg
+def test_get_or_compute_peaks_ignores_stale_unversioned_cache(
+    tmp_aidj, tmp_path: Path
+) -> None:
+    """An old cache file (without the new version prefix) must NOT be read.
+
+    Before the format-version fix, writers put cached peaks at
+    ``peaks-{samples}.json``. After the fix the filename is
+    ``peaks-v2-{samples}.json`` so reads look up a different key and the
+    stale file is ignored. Without this versioning, users with a pre-fix
+    cache would keep seeing the over-bucketed peaks even after the math
+    was corrected.
+    """
+    import json
+
+    from aidj.store import cache
+
+    p = tmp_path / "song.wav"
+    _make_test_wav(p, duration_sec=1.0)
+    track_hash = "c" * 64
+
+    # Write a stale, unversioned cache file with deliberately wrong data.
+    cache.put_bytes(
+        audio_peaks.PEAKS_KIND,
+        track_hash,
+        "peaks-2048.json",  # the *old* filename
+        json.dumps({"duration_sec": 999.9, "samples": 1, "peaks": [0.0]}).encode(),
+    )
+
+    # Compute through the cached entry point. It must NOT serve the stale
+    # value — it should call ffmpeg and return real peaks.
+    result = audio_peaks.get_or_compute_peaks(track_hash, p, samples=2048)
+    assert result.duration_sec != 999.9
+    assert result.samples > 1
+    # And the new versioned cache file should now exist alongside the orphan.
+    new_path = cache.path_for(
+        audio_peaks.PEAKS_KIND, track_hash,
+        f"peaks-v{audio_peaks.PEAKS_FORMAT_VERSION}-2048.json",
+        create_parent=False,
+    )
+    assert new_path.is_file()
+
+
+@needs_ffmpeg
 def test_get_or_compute_peaks_caches_result(tmp_aidj, tmp_path: Path) -> None:
     p = tmp_path / "song.wav"
     _make_test_wav(p, duration_sec=1.0)

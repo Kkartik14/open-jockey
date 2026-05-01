@@ -39,6 +39,23 @@ class AnalysisStatus(StrEnum):
     FAILED = "failed"
 
 
+class AnalysisLabelKind(StrEnum):
+    """Verification labels a user can attach to an analysis run during bake-off.
+
+    The canonical failure-mode set the friend audit asked for: not just
+    correct/✗, but the *kind* of mistake an analyzer made so we can roll up
+    per-genre and per-analyzer stats when picking a default.
+    """
+    CORRECT = "correct"
+    HALF_TIME = "half_time"
+    DOUBLE_TIME = "double_time"
+    WRONG_DOWNBEAT_PHASE = "wrong_downbeat_phase"
+    EARLY_BY_MS = "early_by_ms"
+    LATE_BY_MS = "late_by_ms"
+    WRONG_SECTION_LABELS = "wrong_section_labels"
+    UNUSABLE = "unusable"
+
+
 class SectionLabel(StrEnum):
     """Normalised structure-segment label set.
 
@@ -140,6 +157,25 @@ class AnalysisRun(_ModelBase):
         )
 
 
+class AnalysisLabel(_ModelBase):
+    id: int
+    analysis_run_id: int
+    kind: AnalysisLabelKind
+    notes: str | None = None
+    created_at: str | None = None
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> Self:
+        d = dict(row)
+        return cls(
+            id=d["id"],
+            analysis_run_id=d["analysis_run_id"],
+            kind=AnalysisLabelKind(d["kind"]),
+            notes=d.get("notes"),
+            created_at=d.get("created_at"),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Analyzer output schemas (stored as JSON in analysis_runs.output_json)
 # ---------------------------------------------------------------------------
@@ -182,3 +218,14 @@ class BeatGridAnalysis(_ModelBase):
         default=None,
         description="Overall confidence in the analysis. Surfaces in analysis_runs.confidence.",
     )
+
+
+class KeyAnalysis(_ModelBase):
+    """Output schema for key-detection analyzers (essentia)."""
+    key: str = Field(..., description='Tonic, e.g. "C", "F#", "Bb".')
+    scale: str = Field(..., description='"major" or "minor".')
+    camelot: str | None = Field(
+        default=None,
+        description='Camelot wheel notation, e.g. "8B" for C major.',
+    )
+    confidence: float | None = None

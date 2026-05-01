@@ -17,7 +17,7 @@ from aidj.config import settings
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 PRAGMA journal_mode = WAL;
@@ -115,6 +115,22 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_kind ON jobs(kind);
+
+-- Bake-off verification labels: a user listens to a click track over the
+-- detected beats and marks each analysis run with one or more failure-mode
+-- tags. Multiple labels of the same kind are allowed (e.g. you might mark
+-- "correct" twice if you listened twice).
+CREATE TABLE IF NOT EXISTS analysis_labels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    analysis_run_id INTEGER NOT NULL REFERENCES analysis_runs(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN (
+        'correct','half_time','double_time','wrong_downbeat_phase',
+        'early_by_ms','late_by_ms','wrong_section_labels','unusable'
+    )),
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_labels_run ON analysis_labels(analysis_run_id);
 """
 
 
@@ -171,6 +187,9 @@ def _migrate_in_place(conn: sqlite3.Connection) -> None:
     if "claim_token" not in cols:
         log.info("migrating analysis_runs: adding claim_token column")
         conn.execute("ALTER TABLE analysis_runs ADD COLUMN claim_token TEXT")
+
+    # The CREATE TABLE in SCHEMA_SQL handles the new analysis_labels table on
+    # fresh DBs and is no-op on existing ones — nothing else to migrate.
 
 
 @contextmanager

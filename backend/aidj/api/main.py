@@ -24,8 +24,15 @@ from aidj.config import settings
 from aidj.plugins.manifest import Hardware
 from aidj.plugins.registry import registry
 from aidj.plugins.runtime import Plugin, PluginError
-from aidj.store import analysis_runs, db, jobs, tracks
-from aidj.store.models import AnalysisRun, Job, JobStatus, Track
+from aidj.store import analysis_labels, analysis_runs, db, jobs, tracks
+from aidj.store.models import (
+    AnalysisLabel,
+    AnalysisLabelKind,
+    AnalysisRun,
+    Job,
+    JobStatus,
+    Track,
+)
 
 CLOUD_AUDIO_OPT_IN_ENV = "AIDJ_ALLOW_CLOUD_AUDIO"
 # RUNNING rows older than ``2 * default_timeout`` are treated as stale (the
@@ -116,6 +123,23 @@ class AnalyzeRequest(BaseModel):
         gt=0,
         description="Per-call timeout in seconds. None → plugin default.",
     )
+
+
+class AnalysisRunDetail(AnalysisRun):
+    """An analysis run with embedded verification labels.
+
+    Returned by the listing endpoint so the frontend doesn't have to fan out N
+    label requests after fetching N runs (the previous behaviour got noisy
+    fast in a bake-off across many tracks). The single-run endpoint still
+    returns plain ``AnalysisRun`` since label mutations live at separate paths.
+    """
+
+    labels: list[AnalysisLabel] = Field(default_factory=list)
+
+
+class AddLabelRequest(BaseModel):
+    kind: AnalysisLabelKind
+    notes: str | None = Field(default=None, max_length=500)
 
 
 # ---------------------------------------------------------------------------
@@ -427,11 +451,16 @@ def _execute_with_claim(
     )
 
 
-@app.get("/api/tracks/{content_hash}/analyses", response_model=list[AnalysisRun])
-def list_track_analyses(content_hash: str) -> list[AnalysisRun]:
+@app.get("/api/tracks/{content_hash}/analyses", response_model=list[AnalysisRunDetail])
+def list_track_analyses(content_hash: str) -> list[AnalysisRunDetail]:
     if tracks.get(content_hash) is None:
         raise HTTPException(status_code=404, detail=f"track not found: {content_hash}")
-    return analysis_runs.list_for_track(content_hash)
+    runs = analysis_runs.list_for_track(content_hash)
+    labels_map = analysis_labels.list_for_runs([r.id for r in runs])
+    return [
+        AnalysisRunDetail(**r.model_dump(), labels=labels_map.get(r.id, []))
+        for r in runs
+    ]
 
 
 @app.get(
@@ -448,6 +477,60 @@ def get_track_analysis(content_hash: str, analyzer_name: str) -> AnalysisRun:
             detail=f"no analysis run for {content_hash[:12]}/{analyzer_name}",
         )
     return run
+
+
+# ---------------------------------------------------------------------------
+# Analysis labels (bake-off verification)
+# ---------------------------------------------------------------------------
+
+
+_TERMINAL_STATUSES = frozenset({"completed", "failed"})
+
+
+def _get_run_or_404(run_id: int) -> dict[str, Any]:
+    row = db.fetch_one("SELECT id, status FROM analysis_runs WHERE id=?", (run_id,))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"analysis run not found: {run_id}")
+    return dict(row)
+
+
+@app.post(
+    "/api/analyses/{run_id}/labels",
+    response_model=AnalysisLabel,
+    status_code=201,
+)
+def add_analysis_label(run_id: int, body: AddLabelRequest) -> AnalysisLabel:
+    run = _get_run_or_404(run_id)
+    if run["status"] not in _TERMINAL_STATUSES:
+        # Verification events only make sense once the analyzer has produced
+        # something to verify. Reject early so direct API callers can't create
+        # labels the UI deliberately hides.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"can only label completed or failed runs (run is "
+                f"{run['status']}); wait for the analyzer to finish."
+            ),
+        )
+    return analysis_labels.add(
+        analysis_run_id=run_id,
+        kind=body.kind,
+        notes=body.notes,
+    )
+
+
+@app.get("/api/analyses/{run_id}/labels", response_model=list[AnalysisLabel])
+def list_analysis_labels(run_id: int) -> list[AnalysisLabel]:
+    _get_run_or_404(run_id)
+    return analysis_labels.list_for_run(run_id)
+
+
+@app.delete("/api/analyses/{run_id}/labels/{label_id}", status_code=204)
+def delete_analysis_label(run_id: int, label_id: int) -> None:
+    label = analysis_labels.get(label_id)
+    if label is None or label.analysis_run_id != run_id:
+        raise HTTPException(status_code=404, detail=f"label not found: {label_id}")
+    analysis_labels.delete(label_id)
 
 
 # ---------------------------------------------------------------------------

@@ -67,6 +67,22 @@ def test_cloud_audio_field_defaults(tmp_aidj) -> None:
     assert by_name["allin1_remote"].manifest.cloud_audio is True
 
 
+def test_essentia_plugin_discovered(tmp_aidj) -> None:
+    """Key-detection plugin scaffolded in plugins/essentia/ is picked up."""
+    by_name = {m.name: m for m in registry().manifests()}
+    assert "essentia" in by_name
+    assert by_name["essentia"].manifest.cloud_audio is False
+    assert by_name["essentia"].manifest.default_timeout_sec == 300.0
+
+
+def test_madmom_msaf_plugin_disabled_via_renamed_manifest(tmp_aidj) -> None:
+    """madmom_msaf is intentionally quarantined (manifest renamed); discovery
+    must skip it. If a future change re-enables the plugin this test will fail
+    and we'll know to run the bake-off methodology against it."""
+    by_name = {m.name: m for m in registry().manifests()}
+    assert "madmom_msaf" not in by_name
+
+
 def test_info_method_served_by_sdk(tmp_aidj) -> None:
     p = registry().get("echo")
     assert p.call("info") == {"name": "echo", "version": "0.1.0"}

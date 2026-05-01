@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass
@@ -31,6 +32,13 @@ DEFAULT_SAMPLES = 2048
 DEFAULT_SAMPLE_RATE_HZ = 8000  # downsample target — plenty for a UI waveform
 FFPROBE_TIMEOUT_SEC = 30.0
 FFMPEG_TIMEOUT_SEC = 120.0
+
+# Bump whenever the math that produces the peaks array changes (bucket sizing,
+# normalisation, smoothing, etc.). The cache filename includes this number so
+# stale files written by an older algorithm version are simply not read —
+# they sit on disk until cache GC sweeps them, but the wrong shape never
+# reaches the client.
+PEAKS_FORMAT_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -68,7 +76,10 @@ def extract_peaks(
     if pcm.size == 0:
         return PeaksData(duration_sec=duration, samples=0, peaks=[])
 
-    bucket_size = max(1, pcm.size // samples)
+    # Use ``ceil`` instead of floor division so the resulting bucket count is
+    # always ≤ ``samples`` (otherwise short audio + small ``samples`` like
+    # 8000 PCM / samples=2048 yields bucket_size=3 → 2666 buckets > 2048).
+    bucket_size = max(1, math.ceil(pcm.size / samples))
     n_buckets = pcm.size // bucket_size
     if n_buckets == 0:
         return PeaksData(duration_sec=duration, samples=0, peaks=[])
@@ -151,11 +162,12 @@ def get_or_compute_peaks(
 ) -> PeaksData:
     """Return cached peaks if present, otherwise compute + cache.
 
-    The cache is keyed on (track_hash, samples) so different waveform sizes
-    coexist. Track-hash being content-addressed means a re-ingested file with
-    the same contents hits the same cache.
+    The cache is keyed on (track_hash, format_version, samples) so different
+    waveform sizes coexist *and* old algorithm versions are silently ignored.
+    Track-hash being content-addressed means a re-ingested file with the same
+    contents hits the same cache.
     """
-    filename = f"peaks-{samples}.json"
+    filename = f"peaks-v{PEAKS_FORMAT_VERSION}-{samples}.json"
     cached = cache.get_bytes(PEAKS_KIND, track_hash, filename)
     if cached is not None:
         try:

@@ -1,0 +1,10 @@
+name: essentia
+description: Key + Camelot detection via essentia's KeyExtractor. CPU-only; no GPU.
+runtime: uv
+python: "3.11"
+entrypoint_module: essentia_plugin
+default_timeout_sec: 300
+hardware:
+  cpu_cores: 2
+  ram_mb: 1024
+  gpu: none
