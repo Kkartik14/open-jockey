@@ -194,3 +194,109 @@ def test_delete_label_wrong_run_404(client: TestClient, sample_file: Path) -> No
 
     r = client.delete(f"/api/analyses/9999999/labels/{label_id}")
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Cross-track bake-off rollups
+# ---------------------------------------------------------------------------
+
+
+def _completed_run_for(track_hash: str, analyzer_name: str) -> int:
+    run = analysis_runs.upsert(
+        track_hash=track_hash,
+        analyzer_name=analyzer_name,
+        analyzer_version="0.1.0",
+        status=AnalysisStatus.COMPLETED,
+        output={"tempo": {"bpm": 120.0}, "beats": [], "sections": [], "duration_sec": 0.0},
+        started_at=analysis_runs.utc_now_iso(),
+        finished_at=analysis_runs.utc_now_iso(),
+    )
+    return run.id
+
+
+def test_rollup_by_analyzer_aggregates_across_tracks(tmp_aidj, tmp_path: Path) -> None:
+    a = tmp_path / "a.bin"
+    a.write_bytes(b"a" * 32)
+    b = tmp_path / "b.bin"
+    b.write_bytes(b"b" * 32)
+
+    track_a = tracks.ingest(a)
+    track_b = tracks.ingest(b)
+
+    run_a_allin1 = _completed_run_for(track_a.content_hash, "allin1")
+    run_a_librosa = _completed_run_for(track_a.content_hash, "librosa")
+    run_b_allin1 = _completed_run_for(track_b.content_hash, "allin1")
+
+    analysis_labels.add(analysis_run_id=run_a_allin1, kind=AnalysisLabelKind.CORRECT)
+    analysis_labels.add(analysis_run_id=run_a_allin1, kind=AnalysisLabelKind.CORRECT)
+    analysis_labels.add(analysis_run_id=run_a_librosa, kind=AnalysisLabelKind.HALF_TIME)
+    analysis_labels.add(analysis_run_id=run_b_allin1, kind=AnalysisLabelKind.CORRECT)
+
+    rollup = analysis_labels.rollup_by_analyzer()
+    assert rollup["allin1"][AnalysisLabelKind.CORRECT] == 3
+    assert rollup["librosa"][AnalysisLabelKind.HALF_TIME] == 1
+    # Kinds with zero counts are simply absent — no need to populate zeros.
+    assert AnalysisLabelKind.HALF_TIME not in rollup["allin1"]
+
+
+def test_rollup_returns_empty_when_no_labels(tmp_aidj) -> None:
+    assert analysis_labels.rollup_by_analyzer() == {}
+    assert analysis_labels.rollup_by_analyzer_and_genre() == {}
+
+
+def test_rollup_by_analyzer_and_genre_buckets_untagged(tmp_aidj, tmp_path: Path) -> None:
+    a = tmp_path / "a.bin"
+    a.write_bytes(b"a" * 32)
+    b = tmp_path / "b.bin"
+    b.write_bytes(b"b" * 32)
+    c = tmp_path / "c.bin"
+    c.write_bytes(b"c" * 32)
+
+    track_a = tracks.ingest(a)
+    track_b = tracks.ingest(b)
+    track_c = tracks.ingest(c)
+    tracks.set_genre(track_a.content_hash, "electronic")
+    tracks.set_genre(track_b.content_hash, "electronic")
+    # track_c stays untagged.
+
+    run_a = _completed_run_for(track_a.content_hash, "allin1")
+    run_b = _completed_run_for(track_b.content_hash, "allin1")
+    run_c = _completed_run_for(track_c.content_hash, "allin1")
+
+    analysis_labels.add(analysis_run_id=run_a, kind=AnalysisLabelKind.CORRECT)
+    analysis_labels.add(analysis_run_id=run_b, kind=AnalysisLabelKind.CORRECT)
+    analysis_labels.add(analysis_run_id=run_c, kind=AnalysisLabelKind.HALF_TIME)
+
+    rollup = analysis_labels.rollup_by_analyzer_and_genre()
+    assert rollup["allin1"]["electronic"][AnalysisLabelKind.CORRECT] == 2
+    assert rollup["allin1"][analysis_labels.UNTAGGED_GENRE][AnalysisLabelKind.HALF_TIME] == 1
+
+
+def test_rollup_endpoint_returns_totals(client: TestClient, sample_file: Path) -> None:
+    track = tracks.ingest(sample_file)
+    run_id = _make_completed_run(track.content_hash)
+    client.post(f"/api/analyses/{run_id}/labels", json={"kind": "correct"})
+    client.post(f"/api/analyses/{run_id}/labels", json={"kind": "double_time"})
+
+    r = client.get("/api/labels/rollup")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total_labels"] == 2
+    assert body["total_labeled_runs"] == 1
+    assert body["by_analyzer"]["echo"]["correct"] == 1
+    assert body["by_analyzer"]["echo"]["double_time"] == 1
+    # Untagged genre bucket — no genre set on the track.
+    untagged = body["by_analyzer_and_genre"]["echo"][analysis_labels.UNTAGGED_GENRE]
+    assert untagged["correct"] == 1
+
+
+def test_rollup_endpoint_when_empty(client: TestClient) -> None:
+    r = client.get("/api/labels/rollup")
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {
+        "by_analyzer": {},
+        "by_analyzer_and_genre": {},
+        "total_labels": 0,
+        "total_labeled_runs": 0,
+    }

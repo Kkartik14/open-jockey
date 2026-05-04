@@ -23,7 +23,7 @@ def test_health(client: TestClient, tmp_aidj) -> None:
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == 3
+    assert body["schema_version"] == 4
     assert body["project_root"] == str(tmp_aidj.project_root)
 
 
@@ -191,6 +191,54 @@ def test_get_track_returns_track(client: TestClient, sample_file: Path) -> None:
 def test_get_track_404_for_unknown(client: TestClient) -> None:
     r = client.get("/api/tracks/" + ("0" * 64))
     assert r.status_code == 404
+
+
+def test_patch_track_sets_genre(client: TestClient, sample_file: Path) -> None:
+    track = tracks.ingest(sample_file)
+    r = client.patch(f"/api/tracks/{track.content_hash}", json={"genre": "Bollywood"})
+    assert r.status_code == 200
+    assert r.json()["genre"] == "Bollywood"
+
+    refetch = client.get(f"/api/tracks/{track.content_hash}")
+    assert refetch.json()["genre"] == "Bollywood"
+
+
+def test_patch_track_clears_genre_with_null(client: TestClient, sample_file: Path) -> None:
+    track = tracks.ingest(sample_file)
+    client.patch(f"/api/tracks/{track.content_hash}", json={"genre": "rock"})
+    r = client.patch(f"/api/tracks/{track.content_hash}", json={"genre": None})
+    assert r.status_code == 200
+    assert r.json()["genre"] is None
+
+
+def test_patch_track_omitted_genre_is_noop(client: TestClient, sample_file: Path) -> None:
+    track = tracks.ingest(sample_file)
+    client.patch(f"/api/tracks/{track.content_hash}", json={"genre": "rock"})
+
+    r = client.patch(f"/api/tracks/{track.content_hash}", json={})
+    assert r.status_code == 200
+    assert r.json()["genre"] == "rock"
+
+
+def test_patch_track_404_for_unknown(client: TestClient) -> None:
+    r = client.patch("/api/tracks/" + ("0" * 64), json={"genre": "anything"})
+    assert r.status_code == 404
+
+
+def test_patch_track_rejects_unknown_fields(client: TestClient, sample_file: Path) -> None:
+    track = tracks.ingest(sample_file)
+    r = client.patch(f"/api/tracks/{track.content_hash}", json={"mood": "happy"})
+    assert r.status_code == 422
+
+
+def test_patch_track_validates_max_length(client: TestClient, sample_file: Path) -> None:
+    """Pydantic ``max_length=100`` rejects egregiously long genre strings."""
+    track = tracks.ingest(sample_file)
+    r = client.patch(
+        f"/api/tracks/{track.content_hash}",
+        json={"genre": "x" * 200},
+    )
+    assert r.status_code == 422
 
 
 # ---------------------------------------------------------------------------

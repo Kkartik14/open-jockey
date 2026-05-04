@@ -3,37 +3,82 @@
  *
  * Track rows now link to /track/:hash, where the per-track view lives.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, type Health, type Job, type Plugin, type Track } from "../api";
+import {
+  api,
+  type AnalysisLabelKind,
+  type Health,
+  type Job,
+  type LabelRollup,
+  type Plugin,
+  type Track,
+} from "../api";
 import { Section, StatusPill } from "../components/ui";
 import { fmtBytes } from "../lib/format";
+import { LABEL_KINDS } from "../lib/labels";
 
 export function LibraryPage() {
-  const [health, setHealth] = useState<Health | null>(null);
-  const [healthErr, setHealthErr] = useState<string | null>(null);
-  const [plugins, setPlugins] = useState<Plugin[]>([]);
-  const [tracks, setTracks] = useState<Track[]>([]);
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [pluginOutput, setPluginOutput] = useState<string>("");
-  const [ingestPath, setIngestPath] = useState<string>("");
+  const [state, dispatchLibrary] = useReducer(
+    libraryReducer,
+    INITIAL_LIBRARY_STATE,
+  );
+  const {
+    health,
+    healthErr,
+    plugins,
+    tracks,
+    jobs,
+    rollup,
+    rollupErr,
+    pluginOutput,
+    ingestPath,
+  } = state;
 
   async function refresh() {
-    try {
-      const [h, ps, ts, js] = await Promise.all([
+    const [healthResult, pluginsResult, tracksResult, jobsResult, rollupResult] =
+      await Promise.allSettled([
         api.health(),
         api.listPlugins(),
         api.listTracks(),
         api.listJobs(),
+        api.getLabelRollup(),
       ]);
-      setHealth(h);
-      setHealthErr(null);
-      setPlugins(ps);
-      setTracks(ts);
-      setJobs(js);
-    } catch (e) {
-      setHealthErr((e as Error).message);
+    const patch: Partial<LibraryState> = {};
+
+    if (healthResult.status === "fulfilled") {
+      patch.health = healthResult.value;
+      patch.healthErr = null;
+    } else {
+      patch.healthErr = errorMessage(healthResult.reason);
     }
+
+    if (pluginsResult.status === "fulfilled") {
+      patch.plugins = pluginsResult.value;
+    } else {
+      console.error("listPlugins failed", pluginsResult.reason);
+    }
+
+    if (tracksResult.status === "fulfilled") {
+      patch.tracks = tracksResult.value;
+    } else {
+      console.error("listTracks failed", tracksResult.reason);
+    }
+
+    if (jobsResult.status === "fulfilled") {
+      patch.jobs = jobsResult.value;
+    } else {
+      console.error("listJobs failed", jobsResult.reason);
+    }
+
+    if (rollupResult.status === "fulfilled") {
+      patch.rollup = rollupResult.value;
+      patch.rollupErr = null;
+    } else {
+      patch.rollupErr = errorMessage(rollupResult.reason);
+      console.error("getLabelRollup failed", rollupResult.reason);
+    }
+    dispatchLibrary(patch);
   }
 
   useEffect(() => {
@@ -47,9 +92,9 @@ export function LibraryPage() {
     // call on any name without knowing what methods the plugin implements.
     try {
       const out = await api.callPlugin(name, "ping");
-      setPluginOutput(`${name}: ${JSON.stringify(out.result)}`);
+      dispatchLibrary({ pluginOutput: `${name}: ${JSON.stringify(out.result)}` });
     } catch (e) {
-      setPluginOutput(`${name}: error: ${(e as Error).message}`);
+      dispatchLibrary({ pluginOutput: `${name}: error: ${errorMessage(e)}` });
     }
   }
 
@@ -57,7 +102,7 @@ export function LibraryPage() {
     if (!ingestPath.trim()) return;
     try {
       await api.ingestTrack(ingestPath.trim());
-      setIngestPath("");
+      dispatchLibrary({ ingestPath: "" });
       await refresh();
     } catch (e) {
       alert((e as Error).message);
@@ -138,7 +183,7 @@ export function LibraryPage() {
         <div className="flex gap-2">
           <input
             value={ingestPath}
-            onChange={(e) => setIngestPath(e.target.value)}
+            onChange={(e) => dispatchLibrary({ ingestPath: e.target.value })}
             onKeyDown={(e) => e.key === "Enter" && ingest()}
             placeholder="absolute path to an audio file (or any file for now)"
             className="flex-1 rounded border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm font-mono placeholder-zinc-600 focus:border-zinc-600 focus:outline-none"
@@ -183,6 +228,10 @@ export function LibraryPage() {
         )}
       </Section>
 
+      <Section title="Bake-off rollup">
+        <RollupSection rollup={rollup} error={rollupErr} />
+      </Section>
+
       <Section title="Jobs">
         {jobs.length === 0 ? (
           <p className="text-sm text-zinc-500">none</p>
@@ -214,5 +263,204 @@ export function LibraryPage() {
         )}
       </Section>
     </div>
+  );
+}
+
+type LibraryState = {
+  health: Health | null;
+  healthErr: string | null;
+  plugins: Plugin[];
+  tracks: Track[];
+  jobs: Job[];
+  rollup: LabelRollup | null;
+  rollupErr: string | null;
+  pluginOutput: string;
+  ingestPath: string;
+};
+
+const INITIAL_LIBRARY_STATE: LibraryState = {
+  health: null,
+  healthErr: null,
+  plugins: [],
+  tracks: [],
+  jobs: [],
+  rollup: null,
+  rollupErr: null,
+  pluginOutput: "",
+  ingestPath: "",
+};
+
+function libraryReducer(
+  state: LibraryState,
+  patch: Partial<LibraryState>,
+): LibraryState {
+  return { ...state, ...patch };
+}
+
+// ---------------------------------------------------------------------------
+// Bake-off rollup — analyzer × label-kind matrix, optional per-genre breakdown
+// ---------------------------------------------------------------------------
+
+function errorMessage(value: unknown): string {
+  return value instanceof Error ? value.message : String(value);
+}
+
+function RollupSection({
+  rollup,
+  error,
+}: {
+  rollup: LabelRollup | null;
+  error: string | null;
+}) {
+  const [byGenre, setByGenre] = useState(false);
+
+  if (!rollup) {
+    return (
+      <p className="text-sm text-zinc-500">
+        {error ? `rollup unavailable: ${error}` : "loading…"}
+      </p>
+    );
+  }
+  if (rollup.total_labels === 0) {
+    return (
+      <div className="space-y-2">
+        {error && <p className="text-xs text-amber-300">rollup refresh failed: {error}</p>}
+        <p className="text-sm text-zinc-500">
+          no labels yet — open a track, run analyzers, listen with the click track,
+          and tag each run with what you hear
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {error && <p className="text-xs text-amber-300">rollup refresh failed: {error}</p>}
+      <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-500">
+        <span>
+          {rollup.total_labels} labels across {rollup.total_labeled_runs} analysis runs
+        </span>
+        <button
+          type="button"
+          onClick={() => setByGenre((v) => !v)}
+          className="rounded bg-zinc-800 px-2 py-0.5 hover:bg-zinc-700"
+        >
+          {byGenre ? "hide genre breakdown" : "show by genre"}
+        </button>
+      </div>
+      {byGenre ? (
+        <RollupTableByGenre data={rollup.by_analyzer_and_genre} />
+      ) : (
+        <RollupTable data={rollup.by_analyzer} />
+      )}
+    </div>
+  );
+}
+
+type CountsByKind = Partial<Record<AnalysisLabelKind, number>>;
+
+function rowTotal(counts: CountsByKind): number {
+  return Object.values(counts).reduce<number>((s, n) => s + (n ?? 0), 0);
+}
+
+function HeaderRow({ extraCols = 0 }: { extraCols?: number }) {
+  return (
+    <thead className="text-left text-zinc-500">
+      <tr>
+        <th className="py-1 pr-3">analyzer</th>
+        {extraCols > 0 && <th className="py-1 pr-3">genre</th>}
+        {LABEL_KINDS.map((k) => (
+          <th
+            key={k.kind}
+            className="px-2 py-1 text-center"
+            title={k.kind}
+          >
+            {k.tag}
+          </th>
+        ))}
+        <th className="py-1 pl-3 text-right">total</th>
+      </tr>
+    </thead>
+  );
+}
+
+function CountCells({ counts }: { counts: CountsByKind }) {
+  return (
+    <>
+      {LABEL_KINDS.map((k) => {
+        const n = counts[k.kind] ?? 0;
+        return (
+          <td
+            key={k.kind}
+            className={`px-2 py-1 text-center ${
+              n > 0 ? `rounded ${k.tone}` : "text-zinc-700"
+            }`}
+          >
+            {n > 0 ? n : "·"}
+          </td>
+        );
+      })}
+    </>
+  );
+}
+
+function RollupTable({ data }: { data: Record<string, CountsByKind> }) {
+  const analyzers = Object.keys(data).sort();
+  return (
+    <table className="w-full text-xs font-mono">
+      <HeaderRow />
+      <tbody>
+        {analyzers.map((a) => {
+          const counts = data[a];
+          return (
+            <tr key={a} className="border-t border-zinc-800/50">
+              <td className="py-1 pr-3 text-zinc-100">{a}</td>
+              <CountCells counts={counts} />
+              <td className="py-1 pl-3 text-right text-zinc-400">
+                {rowTotal(counts)}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+function RollupTableByGenre({
+  data,
+}: {
+  data: Record<string, Record<string, CountsByKind>>;
+}) {
+  const rows: { analyzer: string; genre: string; counts: CountsByKind }[] = [];
+  for (const [analyzer, genres] of Object.entries(data)) {
+    for (const [genre, counts] of Object.entries(genres)) {
+      rows.push({ analyzer, genre, counts });
+    }
+  }
+  rows.sort(
+    (a, b) =>
+      a.analyzer.localeCompare(b.analyzer) || a.genre.localeCompare(b.genre),
+  );
+
+  return (
+    <table className="w-full text-xs font-mono">
+      <HeaderRow extraCols={1} />
+      <tbody>
+        {rows.map(({ analyzer, genre, counts }) => (
+          <tr
+            key={`${analyzer}::${genre}`}
+            className="border-t border-zinc-800/50"
+          >
+            <td className="py-1 pr-3 text-zinc-100">{analyzer}</td>
+            <td className="py-1 pr-3 text-zinc-400">{genre}</td>
+            <CountCells counts={counts} />
+            <td className="py-1 pl-3 text-right text-zinc-400">
+              {rowTotal(counts)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

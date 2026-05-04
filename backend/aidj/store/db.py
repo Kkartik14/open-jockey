@@ -17,7 +17,7 @@ from aidj.config import settings
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_SQL = """
 PRAGMA journal_mode = WAL;
@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     format TEXT,
     bitrate INTEGER,
     file_size INTEGER,
+    genre TEXT,
     last_seen TEXT NOT NULL DEFAULT (datetime('now')),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -187,6 +188,12 @@ def _migrate_in_place(conn: sqlite3.Connection) -> None:
     if "claim_token" not in cols:
         log.info("migrating analysis_runs: adding claim_token column")
         conn.execute("ALTER TABLE analysis_runs ADD COLUMN claim_token TEXT")
+
+    # v4: ``tracks.genre`` for the per-genre bake-off rollup.
+    track_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tracks)")}
+    if "genre" not in track_cols:
+        log.info("migrating tracks: adding genre column")
+        conn.execute("ALTER TABLE tracks ADD COLUMN genre TEXT")
 
     # The CREATE TABLE in SCHEMA_SQL handles the new analysis_labels table on
     # fresh DBs and is no-op on existing ones — nothing else to migrate.

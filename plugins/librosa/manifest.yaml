@@ -1,0 +1,13 @@
+name: librosa
+description: librosa beat-track + chroma agglomerative segmentation. Baseline for the analyzer bake-off.
+runtime: uv
+python: "3.11"
+entrypoint_module: librosa_plugin
+# librosa is much faster than allin1 (no ML inference) but a 60-min DJ mix
+# loaded as float32 mono is ~318 MB and chroma_cqt + agglomerative can take
+# a couple of minutes. 300s matches essentia and gives headroom for long sets.
+default_timeout_sec: 300
+hardware:
+  cpu_cores: 2
+  ram_mb: 1024
+  gpu: none

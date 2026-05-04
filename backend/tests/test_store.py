@@ -92,6 +92,58 @@ def test_track_probe_cannot_override_identity_fields(tmp_aidj, sample_file: Path
             tracks.ingest(sample_file, probe={key: "spoofed"})
 
 
+def test_track_probe_accepts_genre(tmp_aidj, sample_file: Path) -> None:
+    """``genre`` is whitelisted in the probe so a future tag-reading ingest
+    pass can populate it without going through the API."""
+    t = tracks.ingest(sample_file, probe={"genre": "  house  "})
+    assert t.genre == "house"
+
+
+def test_track_probe_normalizes_empty_genre(tmp_aidj, sample_file: Path) -> None:
+    t = tracks.ingest(sample_file, probe={"genre": "   "})
+    assert t.genre is None
+
+
+def test_track_probe_rejects_non_string_genre(tmp_aidj, sample_file: Path) -> None:
+    with pytest.raises(ValueError, match="genre must be a string"):
+        tracks.ingest(sample_file, probe={"genre": 123})
+
+
+def test_set_genre_updates_track(tmp_aidj, sample_file: Path) -> None:
+    t = tracks.ingest(sample_file)
+    assert t.genre is None
+
+    updated = tracks.set_genre(t.content_hash, "Bollywood")
+    assert updated is not None
+    assert updated.genre == "Bollywood"
+
+    refetched = tracks.get(t.content_hash)
+    assert refetched is not None and refetched.genre == "Bollywood"
+
+
+def test_set_genre_strips_whitespace_and_clears_empty(tmp_aidj, sample_file: Path) -> None:
+    t = tracks.ingest(sample_file)
+    tracks.set_genre(t.content_hash, "  hip-hop  ")
+    assert tracks.get(t.content_hash).genre == "hip-hop"
+
+    # Empty / whitespace-only normalises to None so the rollup buckets it
+    # under (untagged) instead of fragmenting.
+    tracks.set_genre(t.content_hash, "")
+    assert tracks.get(t.content_hash).genre is None
+
+    tracks.set_genre(t.content_hash, "electronic")
+    tracks.set_genre(t.content_hash, "   ")
+    assert tracks.get(t.content_hash).genre is None
+
+    tracks.set_genre(t.content_hash, "rock")
+    tracks.set_genre(t.content_hash, None)
+    assert tracks.get(t.content_hash).genre is None
+
+
+def test_set_genre_returns_none_for_missing_track(tmp_aidj) -> None:
+    assert tracks.set_genre("0" * 64, "anything") is None
+
+
 # -----------------------------
 # jobs
 # -----------------------------

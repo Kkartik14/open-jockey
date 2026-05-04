@@ -28,6 +28,7 @@ export type Track = {
   format: string | null;
   bitrate: number | null;
   file_size: number | null;
+  genre: string | null;
 };
 
 export type Job = {
@@ -83,6 +84,20 @@ export type AnalysisLabel = {
   created_at: string | null;
 };
 
+/**
+ * Cross-track bake-off summary returned by ``GET /api/labels/rollup``.
+ * Drives the Library page's rollup table.
+ */
+export type LabelRollup = {
+  by_analyzer: Record<string, Partial<Record<AnalysisLabelKind, number>>>;
+  by_analyzer_and_genre: Record<
+    string,
+    Record<string, Partial<Record<AnalysisLabelKind, number>>>
+  >;
+  total_labels: number;
+  total_labeled_runs: number;
+};
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     headers: { "Content-Type": "application/json" },
@@ -110,6 +125,12 @@ export const api = {
     }),
   listTracks: () => req<Track[]>("/tracks"),
   getTrack: (hash: string) => req<Track>(`/tracks/${hash}`),
+  /** Patch a track's user-editable metadata. Today only ``genre``. */
+  setTrackGenre: (hash: string, genre: string | null) =>
+    req<Track>(`/tracks/${hash}`, {
+      method: "PATCH",
+      body: JSON.stringify({ genre }),
+    }),
   /** Streaming URL the <audio> element can point at directly (range-served). */
   audioUrl: (hash: string) => `/api/tracks/${hash}/audio`,
   /** Precomputed peaks + duration so WaveSurfer doesn't decode the whole audio. */
@@ -144,4 +165,6 @@ export const api = {
       body: JSON.stringify({ kind, payload }),
     }),
   listJobs: () => req<Job[]>("/jobs"),
+  /** Cross-track bake-off rollup (per-analyzer and per-analyzer-per-genre). */
+  getLabelRollup: () => req<LabelRollup>("/labels/rollup"),
 };

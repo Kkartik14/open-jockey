@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from aidj import __version__
 from aidj.audio import peaks as audio_peaks
@@ -100,6 +100,18 @@ class IngestRequest(BaseModel):
     path: str
 
 
+class UpdateTrackRequest(BaseModel):
+    """Patch payload for ``PATCH /api/tracks/{hash}``.
+
+    Today only ``genre`` is mutable post-ingest; the model is shaped for
+    growth — when more user-mutable fields land (e.g. a manual ``name``
+    override), they get added here and dispatched in ``update_track``.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    genre: str | None = Field(default=None, max_length=100)
+
+
 class EnqueueRequest(BaseModel):
     kind: str
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -140,6 +152,20 @@ class AnalysisRunDetail(AnalysisRun):
 class AddLabelRequest(BaseModel):
     kind: AnalysisLabelKind
     notes: str | None = Field(default=None, max_length=500)
+
+
+class LabelRollupResponse(BaseModel):
+    """Cross-track bake-off rollup. Drives the Library page's rollup table.
+
+    ``by_analyzer`` is the global summary; ``by_analyzer_and_genre`` is the
+    per-genre breakdown (tracks without a genre bucketed under
+    ``analysis_labels.UNTAGGED_GENRE``). Both come from the same labels table
+    so the totals are consistent.
+    """
+    by_analyzer: dict[str, dict[AnalysisLabelKind, int]]
+    by_analyzer_and_genre: dict[str, dict[str, dict[AnalysisLabelKind, int]]]
+    total_labels: int
+    total_labeled_runs: int
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +278,23 @@ def get_track(content_hash: str) -> Track:
     if t is None:
         raise HTTPException(status_code=404, detail=f"track not found: {content_hash}")
     return t
+
+
+@app.patch("/api/tracks/{content_hash}", response_model=Track)
+def update_track(content_hash: str, body: UpdateTrackRequest) -> Track:
+    """Patch a track's user-editable metadata. Currently only ``genre``."""
+    existing = tracks.get(content_hash)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"track not found: {content_hash}")
+
+    # PATCH semantics: omitted fields mean "leave unchanged"; explicit null
+    # means "clear". This matters once UpdateTrackRequest gains more fields.
+    updated = existing
+    if "genre" in body.model_fields_set:
+        updated = tracks.set_genre(content_hash, body.genre)
+        if updated is None:  # pragma: no cover - existence checked just above
+            raise HTTPException(status_code=404, detail=f"track not found: {content_hash}")
+    return updated
 
 
 @app.get("/api/tracks/{content_hash}/audio")
@@ -531,6 +574,21 @@ def delete_analysis_label(run_id: int, label_id: int) -> None:
     if label is None or label.analysis_run_id != run_id:
         raise HTTPException(status_code=404, detail=f"label not found: {label_id}")
     analysis_labels.delete(label_id)
+
+
+@app.get("/api/labels/rollup", response_model=LabelRollupResponse)
+def get_label_rollup() -> LabelRollupResponse:
+    """Cross-track bake-off summary. Empty dicts when no labels exist yet."""
+    total_labels_row = db.fetch_one("SELECT COUNT(*) AS n FROM analysis_labels")
+    total_runs_row = db.fetch_one(
+        "SELECT COUNT(DISTINCT analysis_run_id) AS n FROM analysis_labels"
+    )
+    return LabelRollupResponse(
+        by_analyzer=analysis_labels.rollup_by_analyzer(),
+        by_analyzer_and_genre=analysis_labels.rollup_by_analyzer_and_genre(),
+        total_labels=int(total_labels_row["n"]) if total_labels_row else 0,
+        total_labeled_runs=int(total_runs_row["n"]) if total_runs_row else 0,
+    )
 
 
 # ---------------------------------------------------------------------------

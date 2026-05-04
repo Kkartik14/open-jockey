@@ -75,6 +75,18 @@ def test_essentia_plugin_discovered(tmp_aidj) -> None:
     assert by_name["essentia"].manifest.default_timeout_sec == 300.0
 
 
+def test_librosa_plugin_discovered(tmp_aidj) -> None:
+    """Baseline beat-tracker scaffolded in plugins/librosa/ — gives the
+    bake-off a real comparison candidate against allin1 (allin1_remote runs
+    the same model, so it doesn't count)."""
+    by_name = {m.name: m for m in registry().manifests()}
+    assert "librosa" in by_name
+    assert by_name["librosa"].manifest.cloud_audio is False
+    assert by_name["librosa"].manifest.default_timeout_sec == 300.0
+    # Local CPU plugin — declares no GPU.
+    assert by_name["librosa"].manifest.hardware.gpu == "none"
+
+
 def test_madmom_msaf_plugin_disabled_via_renamed_manifest(tmp_aidj) -> None:
     """madmom_msaf is intentionally quarantined (manifest renamed); discovery
     must skip it. If a future change re-enables the plugin this test will fail

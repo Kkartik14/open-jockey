@@ -97,6 +97,7 @@ class Track(_ModelBase):
     format: str | None = None
     bitrate: int | None = None
     file_size: int | None = None
+    genre: str | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> Self:

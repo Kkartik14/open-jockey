@@ -3,7 +3,7 @@
  * overlay, run an analyzer, see (and label) the runs that have completed
  * against this track.
  */
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   api,
@@ -16,6 +16,7 @@ import {
 import { Waveform, type BeatMark, type SectionMark } from "../components/Waveform";
 import { Section, StatusPill } from "../components/ui";
 import { fmtBytes } from "../lib/format";
+import { LABEL_KINDS } from "../lib/labels";
 
 /** Shape of analyzer output we know about today (allin1, allin1_remote). */
 type BeatGridOutput = {
@@ -33,17 +34,6 @@ type KeyOutput = {
   camelot?: string;
   confidence?: number | null;
 };
-
-const LABEL_KINDS: ReadonlyArray<{ kind: AnalysisLabelKind; tag: string; tone: string }> = [
-  { kind: "correct", tag: "✓", tone: "bg-emerald-900/40 text-emerald-300" },
-  { kind: "half_time", tag: "½×", tone: "bg-amber-900/40 text-amber-300" },
-  { kind: "double_time", tag: "2×", tone: "bg-amber-900/40 text-amber-300" },
-  { kind: "wrong_downbeat_phase", tag: "phase", tone: "bg-rose-900/40 text-rose-300" },
-  { kind: "early_by_ms", tag: "early", tone: "bg-rose-900/40 text-rose-300" },
-  { kind: "late_by_ms", tag: "late", tone: "bg-rose-900/40 text-rose-300" },
-  { kind: "wrong_section_labels", tag: "sections", tone: "bg-rose-900/40 text-rose-300" },
-  { kind: "unusable", tag: "unusable", tone: "bg-red-900/40 text-red-300" },
-];
 
 type TrackDetailState = {
   track: Track | null;
@@ -100,6 +90,11 @@ function TrackDetailContent({ hash }: { hash: string }) {
   } = state;
   const mountedRef = useRef(true);
   const refreshSeqRef = useRef(0);
+  // Genre draft is local so the 5s polling refresh can't yank what the user
+  // is typing. Initialised once when track first loads (guard below); after
+  // that only saveGenre() touches it.
+  const [genreDraft, setGenreDraft] = useState<string>("");
+  const genreInitedRef = useRef(false);
 
   useEffect(
     () => () => {
@@ -185,6 +180,32 @@ function TrackDetailContent({ hash }: { hash: string }) {
     [analyses],
   );
 
+  // Initialise genreDraft from the loaded track exactly once per route mount.
+  // The page already remounts on hash change via key={hash}, so subsequent
+  // polls won't reset the input mid-edit.
+  useEffect(() => {
+    if (track && !genreInitedRef.current) {
+      setGenreDraft(track.genre ?? "");
+      genreInitedRef.current = true;
+    }
+  }, [track]);
+
+  async function saveGenre() {
+    const trimmed = genreDraft.trim();
+    const next = trimmed || null;
+    // Skip if nothing changed (avoid a useless PATCH on Enter).
+    if ((track?.genre ?? null) === next) return;
+    try {
+      const updated = await api.setTrackGenre(hash, next);
+      if (mountedRef.current) {
+        dispatchDetail({ track: updated });
+        setGenreDraft(updated.genre ?? "");
+      }
+    } catch (e) {
+      if (mountedRef.current) console.error("setTrackGenre failed", e);
+    }
+  }
+
   async function runAnalyzer(force: boolean) {
     if (!selectedAnalyzer) return;
     const analyzer = selectedAnalyzer;
@@ -244,132 +265,246 @@ function TrackDetailContent({ hash }: { hash: string }) {
 
   return (
     <div className="space-y-8">
-      <div>
-        <Link to="/" className="text-xs text-zinc-500 hover:text-zinc-300">
-          ← library
-        </Link>
-        <h2 className="mt-1 break-all text-xl text-zinc-100">{filename}</h2>
-        <div className="mt-1 break-all font-mono text-xs text-zinc-500">
-          {track.content_hash}
-        </div>
+      <TrackHeader track={track} filename={filename} />
+      <TrackMetadataSection
+        track={track}
+        genreDraft={genreDraft}
+        onGenreDraftChange={setGenreDraft}
+        onSaveGenre={saveGenre}
+      />
+      <WaveformSection
+        hash={hash}
+        beatGridRuns={beatGridRuns}
+        overlayRunId={overlayRunId}
+        overlayBeats={overlayBeats}
+        overlaySections={overlaySections}
+        onOverlayRunChange={(runId) => dispatchDetail({ overlayRunId: runId })}
+      />
+      <RunAnalyzerSection
+        plugins={plugins}
+        selectedAnalyzer={selectedAnalyzer}
+        running={running}
+        runError={runError}
+        onAnalyzerChange={(value) => dispatchDetail({ selectedAnalyzer: value })}
+        onRun={runAnalyzer}
+      />
+      <AnalysesSection
+        analyses={analyses}
+        onAddLabel={addLabel}
+        onRemoveLabel={removeLabel}
+      />
+    </div>
+  );
+}
+
+function TrackHeader({ track, filename }: { track: Track; filename: string }) {
+  return (
+    <div>
+      <Link to="/" className="text-xs text-zinc-500 hover:text-zinc-300">
+        ← library
+      </Link>
+      <h2 className="mt-1 break-all text-xl text-zinc-100">{filename}</h2>
+      <div className="mt-1 break-all font-mono text-xs text-zinc-500">
+        {track.content_hash}
       </div>
+    </div>
+  );
+}
 
-      <Section title="Track">
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 text-sm font-mono">
-          <dt className="text-zinc-500">format</dt>
-          <dd>{track.format ?? "—"}</dd>
-          <dt className="text-zinc-500">size</dt>
-          <dd>{fmtBytes(track.file_size)}</dd>
-          {track.duration_sec !== null && (
-            <>
-              <dt className="text-zinc-500">duration</dt>
-              <dd>{track.duration_sec.toFixed(1)}s</dd>
-            </>
-          )}
-          <dt className="text-zinc-500">path</dt>
-          <dd className="break-all">{track.source_path}</dd>
-        </dl>
-      </Section>
-
-      <Section title="Waveform">
-        {beatGridRuns.length > 0 && (
-          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
-            <span>overlay:</span>
+function TrackMetadataSection({
+  track,
+  genreDraft,
+  onGenreDraftChange,
+  onSaveGenre,
+}: {
+  track: Track;
+  genreDraft: string;
+  onGenreDraftChange: (value: string) => void;
+  onSaveGenre: () => Promise<void>;
+}) {
+  return (
+    <Section title="Track">
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 text-sm font-mono">
+        <dt className="text-zinc-500">format</dt>
+        <dd>{track.format ?? "—"}</dd>
+        <dt className="text-zinc-500">size</dt>
+        <dd>{fmtBytes(track.file_size)}</dd>
+        {track.duration_sec !== null && (
+          <>
+            <dt className="text-zinc-500">duration</dt>
+            <dd>{track.duration_sec.toFixed(1)}s</dd>
+          </>
+        )}
+        <dt className="text-zinc-500">genre</dt>
+        <dd className="flex items-center gap-2">
+          <input
+            type="text"
+            value={genreDraft}
+            onChange={(e) => onGenreDraftChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void onSaveGenre();
+            }}
+            placeholder="(unset)"
+            maxLength={100}
+            className="w-48 rounded bg-zinc-800 px-2 py-0.5 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-600"
+          />
+          {(track.genre ?? "") !== genreDraft.trim() && (
             <button
               type="button"
-              onClick={() => dispatchDetail({ overlayRunId: null })}
+              onClick={() => void onSaveGenre()}
+              className="rounded bg-blue-600 px-2 py-0.5 text-xs hover:bg-blue-500"
+            >
+              save
+            </button>
+          )}
+        </dd>
+        <dt className="text-zinc-500">path</dt>
+        <dd className="break-all">{track.source_path}</dd>
+      </dl>
+    </Section>
+  );
+}
+
+function WaveformSection({
+  hash,
+  beatGridRuns,
+  overlayRunId,
+  overlayBeats,
+  overlaySections,
+  onOverlayRunChange,
+}: {
+  hash: string;
+  beatGridRuns: AnalysisRun[];
+  overlayRunId: number | null;
+  overlayBeats: BeatMark[] | undefined;
+  overlaySections: SectionMark[] | undefined;
+  onOverlayRunChange: (runId: number | null) => void;
+}) {
+  return (
+    <Section title="Waveform">
+      {beatGridRuns.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
+          <span>overlay:</span>
+          <button
+            type="button"
+            onClick={() => onOverlayRunChange(null)}
+            className={`rounded px-2 py-1 font-mono ${
+              overlayRunId === null
+                ? "bg-zinc-700 text-zinc-100"
+                : "bg-zinc-900 text-zinc-500 hover:bg-zinc-800"
+            }`}
+          >
+            none
+          </button>
+          {beatGridRuns.map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => onOverlayRunChange(r.id)}
               className={`rounded px-2 py-1 font-mono ${
-                overlayRunId === null
-                  ? "bg-zinc-700 text-zinc-100"
-                  : "bg-zinc-900 text-zinc-500 hover:bg-zinc-800"
+                overlayRunId === r.id
+                  ? "bg-purple-900/60 text-purple-100"
+                  : "bg-zinc-900 text-zinc-400 hover:bg-zinc-800"
               }`}
             >
-              none
+              {r.analyzer_name}
             </button>
-            {beatGridRuns.map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => dispatchDetail({ overlayRunId: r.id })}
-                className={`rounded px-2 py-1 font-mono ${
-                  overlayRunId === r.id
-                    ? "bg-purple-900/60 text-purple-100"
-                    : "bg-zinc-900 text-zinc-400 hover:bg-zinc-800"
-                }`}
-              >
-                {r.analyzer_name}
-              </button>
-            ))}
-          </div>
-        )}
-        <Waveform
-          trackHash={hash}
-          beats={overlayBeats}
-          sections={overlaySections}
-        />
-      </Section>
-
-      <Section title="Run analyzer">
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={selectedAnalyzer}
-            onChange={(e) => dispatchDetail({ selectedAnalyzer: e.target.value })}
-            className="rounded border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm font-mono"
-          >
-            <option value="">select analyzer…</option>
-            {plugins.map((p) => (
-              <option key={p.name} value={p.name}>
-                {p.name}
-                {p.cloud_audio ? " (cloud)" : ""}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={() => runAnalyzer(false)}
-            disabled={running || !selectedAnalyzer}
-            className="rounded bg-blue-600 px-4 py-2 text-sm hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {running ? "running…" : "run"}
-          </button>
-          <button
-            onClick={() => runAnalyzer(true)}
-            disabled={running || !selectedAnalyzer}
-            className="rounded bg-zinc-700 px-3 py-2 text-xs hover:bg-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
-            title="Re-run even if a completed result is already cached"
-          >
-            force re-run
-          </button>
-          {runError && <span className="text-xs text-red-400">{runError}</span>}
+          ))}
         </div>
-        {selectedAnalyzer &&
-          plugins.find((p) => p.name === selectedAnalyzer)?.cloud_audio && (
-            <p className="mt-2 text-xs text-amber-300">
-              this analyzer uploads audio off-machine — backend must be started with
-              <code className="mx-1 rounded bg-amber-950/40 px-1 py-0.5">
-                AIDJ_ALLOW_CLOUD_AUDIO=1
-              </code>
-            </p>
-          )}
-      </Section>
+      )}
+      <Waveform trackHash={hash} beats={overlayBeats} sections={overlaySections} />
+    </Section>
+  );
+}
 
-      <Section title="Analyses">
-        {analyses.length === 0 ? (
-          <p className="text-sm text-zinc-500">no runs yet</p>
-        ) : (
-          <ul className="space-y-2">
-            {analyses.map((r) => (
-              <AnalysisCard
-                key={r.id}
-                run={r}
-                labels={r.labels ?? []}
-                onAddLabel={(kind) => addLabel(r.id, kind)}
-                onRemoveLabel={(labelId) => removeLabel(r.id, labelId)}
-              />
-            ))}
-          </ul>
-        )}
-      </Section>
-    </div>
+function RunAnalyzerSection({
+  plugins,
+  selectedAnalyzer,
+  running,
+  runError,
+  onAnalyzerChange,
+  onRun,
+}: {
+  plugins: Plugin[];
+  selectedAnalyzer: string;
+  running: boolean;
+  runError: string | null;
+  onAnalyzerChange: (value: string) => void;
+  onRun: (force: boolean) => Promise<void>;
+}) {
+  const selectedPlugin = plugins.find((p) => p.name === selectedAnalyzer);
+  return (
+    <Section title="Run analyzer">
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={selectedAnalyzer}
+          onChange={(e) => onAnalyzerChange(e.target.value)}
+          className="rounded border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm font-mono"
+        >
+          <option value="">select analyzer…</option>
+          {plugins.map((p) => (
+            <option key={p.name} value={p.name}>
+              {p.name}
+              {p.cloud_audio ? " (cloud)" : ""}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={() => void onRun(false)}
+          disabled={running || !selectedAnalyzer}
+          className="rounded bg-blue-600 px-4 py-2 text-sm hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {running ? "running…" : "run"}
+        </button>
+        <button
+          onClick={() => void onRun(true)}
+          disabled={running || !selectedAnalyzer}
+          className="rounded bg-zinc-700 px-3 py-2 text-xs hover:bg-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
+          title="Re-run even if a completed result is already cached"
+        >
+          force re-run
+        </button>
+        {runError && <span className="text-xs text-red-400">{runError}</span>}
+      </div>
+      {selectedAnalyzer && selectedPlugin?.cloud_audio && (
+        <p className="mt-2 text-xs text-amber-300">
+          this analyzer uploads audio off-machine — backend must be started with
+          <code className="mx-1 rounded bg-amber-950/40 px-1 py-0.5">
+            AIDJ_ALLOW_CLOUD_AUDIO=1
+          </code>
+        </p>
+      )}
+    </Section>
+  );
+}
+
+function AnalysesSection({
+  analyses,
+  onAddLabel,
+  onRemoveLabel,
+}: {
+  analyses: AnalysisRun[];
+  onAddLabel: (runId: number, kind: AnalysisLabelKind) => Promise<void>;
+  onRemoveLabel: (runId: number, labelId: number) => Promise<void>;
+}) {
+  return (
+    <Section title="Analyses">
+      {analyses.length === 0 ? (
+        <p className="text-sm text-zinc-500">no runs yet</p>
+      ) : (
+        <ul className="space-y-2">
+          {analyses.map((r) => (
+            <AnalysisCard
+              key={r.id}
+              run={r}
+              labels={r.labels ?? []}
+              onAddLabel={(kind) => onAddLabel(r.id, kind)}
+              onRemoveLabel={(labelId) => onRemoveLabel(r.id, labelId)}
+            />
+          ))}
+        </ul>
+      )}
+    </Section>
   );
 }
 

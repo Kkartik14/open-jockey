@@ -129,3 +129,40 @@ def test_schema_migration_adds_claim_token_to_old_db(tmp_path: Path) -> None:
     db.reset_for_tests(db_path)
     cols = {row["name"] for row in db.fetch_all("PRAGMA table_info(analysis_runs)")}
     assert "claim_token" in cols, f"migration did not add claim_token; columns: {sorted(cols)}"
+
+
+def test_schema_migration_adds_genre_to_old_tracks_table(tmp_path: Path) -> None:
+    """A pre-v4 DB whose ``tracks`` table predates the genre column should
+    migrate in place rather than crashing on the first SELECT."""
+    import sqlite3
+
+    db_path = tmp_path / "legacy_no_genre.db"
+
+    legacy = sqlite3.connect(db_path)
+    legacy.executescript(
+        """
+        CREATE TABLE tracks (
+            content_hash TEXT PRIMARY KEY,
+            source_path TEXT NOT NULL,
+            duration_sec REAL,
+            sample_rate INTEGER,
+            channels INTEGER,
+            format TEXT,
+            bitrate INTEGER,
+            file_size INTEGER,
+            last_seen TEXT,
+            created_at TEXT
+        );
+        INSERT INTO tracks(content_hash, source_path) VALUES ('aa' || hex(randomblob(31)), '/tmp/x');
+        """
+    )
+    legacy.commit()
+    legacy.close()
+
+    db.reset_for_tests(db_path)
+    cols = {row["name"] for row in db.fetch_all("PRAGMA table_info(tracks)")}
+    assert "genre" in cols, f"migration did not add genre; columns: {sorted(cols)}"
+
+    # Pre-existing rows survive the migration with NULL genre.
+    rows = db.fetch_all("SELECT genre FROM tracks")
+    assert len(rows) == 1 and rows[0]["genre"] is None
