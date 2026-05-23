@@ -12,13 +12,13 @@ Most people have music they love but don't have the time, ear, or DJ training to
 
 ## Status
 
-**Phase 1 in progress.** The analyzer pipeline is wired end-to-end: schema → repository → API → plugin contract.
+**Phase 1 done, Phase 2 in progress.**
 
-- ✅ Phase 0 foundation (project store, plugin runtime, FastAPI app, frontend, 38 tests).
-- 🚧 Phase 1: `BeatGridAnalysis` schema, `analysis_runs` repo, analyze API routes, `allin1` plugin scaffolded (deps lock cleanly; first run downloads ~1 GB of torch + demucs + model weights). 54 tests.
-- ⏳ Still pending in Phase 1: madmom + MSAF plugin (experimental — flagged), essentia plugin (key detection), track-detail UI with dual beat grids, structured failure-mode labels.
+- ✅ Phase 0 foundation (project store, plugin runtime, FastAPI app, frontend).
+- ✅ Phase 1: `BeatGridAnalysis` + `KeyAnalysis` schemas, `analysis_runs` repo, analyze API routes, plugins (`allin1`, `allin1_remote`, `librosa`, `essentia`; `madmom_msaf` quarantined), dual beat-grid UI with click-track verification, structured failure-mode labels, per-analyzer + per-genre rollup table. Running the bake-off on real tracks is user activity.
+- 🚧 Phase 2 — Canonical Track Intelligence: contract + `track_profiles` persistence landing now (step 1 of 8). Profile builder, energy analyzer, lazy demucs + vocal windows, batch profile build, and profile-coverage UI follow.
 
-See [Roadmap](#roadmap).
+See [Roadmap](#roadmap) for the full table.
 
 ## How it works
 
@@ -75,7 +75,7 @@ cd backend && uv run aidj serve --reload
 cd frontend && npm run dev
 ```
 
-Open <http://127.0.0.1:5173>. The health badge goes green, the `echo` plugin shows up with a "call echo()" button, and an ingest box accepts any file path on disk.
+Open <http://127.0.0.1:5173>. The health badge goes green, discovered plugins show a `ping` button, and an ingest box accepts local file paths.
 
 ## Repo layout
 
@@ -106,7 +106,7 @@ Runtime data (SQLite DB, plugin logs, content-addressed cache) lives in `.aidj/`
 cd backend && uv run pytest -q
 ```
 
-30 tests, ~1.2s. Spawns the real `echo` plugin subprocess so plugin RPC is exercised end-to-end.
+The backend suite is 160+ tests. It covers the store, migrations, API routes, plugin RPC, analyzer runs, labels, waveform peaks, and track-profile persistence.
 
 ### CLI
 
@@ -128,8 +128,8 @@ uv run aidj serve --reload --port 8000
 | Phase | What | Status |
 | --- | --- | --- |
 | 0 | Project Store, plugin runtime, FastAPI app, frontend skeleton, test suite | done |
-| 1 | Analyzer pipeline (schema/repo/API/plugin contract); `allin1` scaffolded; `madmom`+`MSAF` (experimental) and `essentia` (key) still pending; track-detail UI still pending | in progress |
-| 2 | Stem-separator bake-off: `htdemucs` vs `htdemucs_ft`, lazy generation | |
+| 1 | Analyzer pipeline (schema/repo/API/plugin contract), `allin1` + `allin1_remote` + `librosa` + `essentia` plugins, dual beat-grid UI, click-track verification, structured failure-mode labels, per-analyzer + per-genre rollup | done (running the bake-off itself is user activity) |
+| 2 | **Canonical Track Intelligence**: `TrackProfile` contract + persistence, deterministic profile builder, local energy analyzer, lazy demucs stem bake-off + vocal windows, batch profile build, profile-coverage UI, label-driven analyzer selection | in progress (step 1: contract + persistence) |
 | 3 | Transition Candidate Graph: cue-point extraction, edge generation, scoring, pruning | |
 | 4 | Renderer with automation envelopes, all transition techniques | |
 | 5 | Planner: `LocalHeuristicPlanner` baseline + `AnthropicPlanner` with structured outputs + validator | |

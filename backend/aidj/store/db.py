@@ -17,7 +17,7 @@ from aidj.config import settings
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA_SQL = """
 PRAGMA journal_mode = WAL;
@@ -132,6 +132,24 @@ CREATE TABLE IF NOT EXISTS analysis_labels (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_labels_run ON analysis_labels(analysis_run_id);
+
+-- Phase 2: canonical per-track profile. One row per track, ON DELETE CASCADE.
+-- The full TrackProfile lives in ``profile_json`` (single source of truth);
+-- the other columns are denormalised for indexed queries (e.g. "which tracks
+-- are blocked?", "find stale profiles") without parsing every JSON.
+--
+-- The CHECK on ``readiness`` mirrors the ``Readiness`` enum in
+-- store.models — keep them in lock-step.
+CREATE TABLE IF NOT EXISTS track_profiles (
+    track_hash TEXT PRIMARY KEY REFERENCES tracks(content_hash) ON DELETE CASCADE,
+    profile_version INTEGER NOT NULL,
+    profile_json TEXT NOT NULL,
+    readiness TEXT NOT NULL CHECK(readiness IN ('ready','partial','blocked')),
+    completeness_score REAL NOT NULL,
+    built_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_track_profiles_readiness ON track_profiles(readiness);
+CREATE INDEX IF NOT EXISTS idx_track_profiles_version ON track_profiles(profile_version);
 """
 
 
@@ -195,8 +213,10 @@ def _migrate_in_place(conn: sqlite3.Connection) -> None:
         log.info("migrating tracks: adding genre column")
         conn.execute("ALTER TABLE tracks ADD COLUMN genre TEXT")
 
-    # The CREATE TABLE in SCHEMA_SQL handles the new analysis_labels table on
-    # fresh DBs and is no-op on existing ones — nothing else to migrate.
+    # v5: ``track_profiles`` is brand-new — ``CREATE TABLE IF NOT EXISTS`` in
+    # SCHEMA_SQL adds it on legacy DBs and is a no-op on fresh ones. Nothing
+    # to detect-and-add; the schema_meta version bump is what signals the
+    # contract change to anyone reading the health endpoint.
 
 
 @contextmanager

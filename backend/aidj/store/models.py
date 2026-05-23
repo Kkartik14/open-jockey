@@ -17,7 +17,7 @@ import sqlite3
 from enum import StrEnum
 from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -230,3 +230,217 @@ class KeyAnalysis(_ModelBase):
         description='Camelot wheel notation, e.g. "8B" for C major.',
     )
     confidence: float | None = None
+
+
+# ---------------------------------------------------------------------------
+# Canonical TrackProfile (Phase 2)
+# ---------------------------------------------------------------------------
+#
+# Funnel between the analyzer layer and every downstream layer. Per-analyzer
+# JSON in ``analysis_runs`` is fine for the bake-off but the planner, candidate
+# graph, and renderer all want ONE trusted, normalised view of a track. The
+# builder (step 3) materialises a TrackProfile from analysis_runs; the
+# repository in ``store.track_profiles`` persists it; this module just defines
+# the shape.
+
+# Bumped when the builder logic, completeness scoring, source-selection rules,
+# or this JSON shape changes. A persisted profile is stale if its
+# ``profile_version`` is less than this constant.
+CURRENT_PROFILE_VERSION = 1
+
+
+class Readiness(StrEnum):
+    """Hard gate downstream layers use to decide what's allowed.
+
+    ``ready``: every required field is filled; full transition generation OK.
+    ``partial``: enough is filled for simple transitions (long crossfade, etc.)
+    but not stem-aware techniques; downstream layers can degrade gracefully.
+    ``blocked``: not usable — the candidate graph should refuse this track.
+    """
+    READY = "ready"
+    PARTIAL = "partial"
+    BLOCKED = "blocked"
+
+
+class FieldProvenance(_ModelBase):
+    """Where a profile block's data actually came from.
+
+    ``source`` is ``"<analyzer-name>@<analyzer-version>"`` for plugin-sourced
+    blocks (matches the strings PluginInfo exposes), or
+    ``"<backend-module>@<version>"`` for backend-derived blocks (e.g.
+    ``"aidj.energy@0.1.0"``).
+
+    ``analysis_run_id`` links back to the row that produced the data so the
+    staleness check can ask "is that analysis_run still the most recent?";
+    None for backend-derived blocks that don't go through analysis_runs.
+    """
+    source: str
+    analysis_run_id: int | None = None
+
+
+class CompletenessFields(_ModelBase):
+    """One boolean per canonical field — drives ``Readiness`` and the UI badge.
+
+    ``completeness_score`` on the TrackProfile is derived from this; the
+    booleans are kept explicit so downstream code can gate per-field
+    (``if profile.fields.has_vocals: ...``) without parsing a float.
+    """
+    has_beat_grid: bool = False
+    has_key: bool = False
+    has_sections: bool = False
+    has_energy: bool = False
+    has_vocals: bool = False
+
+
+class TempoBlock(_ModelBase):
+    """Tempo + its provenance. Conceptually coupled to ``BeatGridBlock`` —
+    the builder must ensure both blocks share the same provenance so a profile
+    can't end up with BPM from one analyzer and beats from another."""
+    bpm: float = Field(gt=0.0)
+    confidence: float | None = None
+    provenance: FieldProvenance
+
+
+class BeatGridBlock(_ModelBase):
+    """Beats + downbeats + duration as one structurally-coupled block.
+
+    ``downbeat_count`` is denormalised from ``beats`` for convenience (avoids
+    counting client-side); the builder writes it once and the UI reads it.
+    """
+    beats: list[Beat]
+    downbeat_count: int = Field(ge=0)
+    duration_sec: float = Field(ge=0.0)
+    provenance: FieldProvenance
+
+    @model_validator(mode="after")
+    def _downbeat_count_matches_beats(self) -> Self:
+        actual = sum(1 for beat in self.beats if beat.is_downbeat)
+        if self.downbeat_count != actual:
+            raise ValueError(
+                f"downbeat_count={self.downbeat_count} does not match beats ({actual})"
+            )
+        return self
+
+
+class KeyBlock(_ModelBase):
+    """Tonic + scale + Camelot, sourced together from a key-detection analyzer."""
+    key: str
+    scale: str
+    camelot: str | None = None
+    confidence: float | None = None
+    provenance: FieldProvenance
+
+
+class SectionsBlock(_ModelBase):
+    """Structural segments. Independent provenance from beat_grid because some
+    analyzer pairs (e.g. madmom + MSAF) split beats and sections across two
+    different upstreams."""
+    items: list[Section]
+    provenance: FieldProvenance
+
+
+class EnergyBlock(_ModelBase):
+    """Time-aligned energy curve + derived markers. Filled by the backend
+    energy utility in step 4; profiles built before then have ``energy=None``.
+
+    ``values`` is a smoothed, normalised-to-[0,1] curve sampled at
+    ``sample_rate_hz``. The shape is intentionally simple — the planner only
+    needs to know energy *over time*, not raw waveform peaks (those live in
+    the peaks cache).
+    """
+    sample_rate_hz: float = Field(gt=0.0)
+    values: list[float]
+    integrated_lufs: float | None = None
+    section_energy: dict[str, float] = Field(default_factory=dict)
+    drop_times_sec: list[float] = Field(default_factory=list)
+    build_times_sec: list[float] = Field(default_factory=list)
+    provenance: FieldProvenance
+
+    @model_validator(mode="after")
+    def _values_are_normalised(self) -> Self:
+        bad = [v for v in self.values if v < 0.0 or v > 1.0]
+        if bad:
+            raise ValueError("energy values must be normalised to [0, 1]")
+        return self
+
+
+class VocalWindow(_ModelBase):
+    """One contiguous time window classified as vocal-heavy or vocal-free.
+
+    ``is_vocal=True`` means the planner should avoid layering another vocal
+    track over this window. ``is_vocal=False`` is a candidate for
+    ``vocal_avoid_layer`` style transitions where the incoming vocal can
+    safely play over the outgoing instrumental.
+    """
+    start_sec: float = Field(ge=0.0)
+    end_sec: float
+    is_vocal: bool
+    confidence: float | None = None
+
+    @model_validator(mode="after")
+    def _end_after_start(self) -> Self:
+        if self.end_sec <= self.start_sec:
+            raise ValueError("vocal window end_sec must be greater than start_sec")
+        return self
+
+
+class VocalsBlock(_ModelBase):
+    """Vocal windows derived from the demucs vocal stem. Filled by step 5;
+    profiles built before then have ``vocals=None``.
+
+    ``stem_cache_key`` links back to the cached demucs stem so a downstream
+    re-derivation (different VAD threshold, say) can find the source bytes
+    without re-running demucs.
+    """
+    windows: list[VocalWindow]
+    stem_cache_key: str | None = None
+    provenance: FieldProvenance
+
+
+class TrackProfile(_ModelBase):
+    """The canonical view of a track. One row per track in ``track_profiles``.
+
+    Blocks are optional — a profile can ship with only ``beat_grid`` + ``key``
+    if energy/vocals haven't been computed yet; ``readiness`` and
+    ``completeness_score`` summarise what's there. Downstream layers should
+    read this object, not raw analysis_runs.
+    """
+    profile_version: int
+    track_hash: str
+    built_at: str
+    readiness: Readiness
+    completeness_score: float = Field(ge=0.0, le=1.0)
+    fields: CompletenessFields
+    tempo: TempoBlock | None = None
+    beat_grid: BeatGridBlock | None = None
+    key: KeyBlock | None = None
+    sections: SectionsBlock | None = None
+    energy: EnergyBlock | None = None
+    vocals: VocalsBlock | None = None
+
+    @model_validator(mode="after")
+    def _completeness_flags_match_blocks(self) -> Self:
+        expected = {
+            "has_beat_grid": self.tempo is not None and self.beat_grid is not None,
+            "has_key": self.key is not None,
+            "has_sections": self.sections is not None,
+            "has_energy": self.energy is not None,
+            "has_vocals": self.vocals is not None,
+        }
+        mismatches = [
+            name
+            for name, present in expected.items()
+            if getattr(self.fields, name) != present
+        ]
+        if mismatches:
+            raise ValueError(
+                "completeness fields do not match profile blocks: "
+                + ", ".join(mismatches)
+            )
+        return self
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> Self:
+        """Profile data lives entirely in the JSON column; other columns are
+        denormalised for indexed queries. The JSON is the truth."""
+        return cls.model_validate(json.loads(dict(row)["profile_json"]))

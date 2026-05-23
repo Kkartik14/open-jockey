@@ -30,15 +30,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 from aidj.store import db
+from aidj.store._timestamps import TIMESTAMP_FMT, utc_now_iso
 from aidj.store.models import AnalysisRun, AnalysisStatus
 
+# Re-exported so callers that already do ``analysis_runs.utc_now_iso()`` keep
+# working — the canonical home is ``aidj.store._timestamps``.
+__all__ = ["utc_now_iso"]
+
 log = logging.getLogger(__name__)
-
-_TIMESTAMP_FMT = "%Y-%m-%d %H:%M:%S"
-
-
-def utc_now_iso() -> str:
-    return datetime.now(UTC).strftime(_TIMESTAMP_FMT)
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +159,7 @@ def _is_stale_running(run: AnalysisRun, stale_after_sec: float) -> bool:
     if run.started_at is None:
         return True
     try:
-        started = datetime.strptime(run.started_at, _TIMESTAMP_FMT).replace(tzinfo=UTC)
+        started = datetime.strptime(run.started_at, TIMESTAMP_FMT).replace(tzinfo=UTC)
     except ValueError:
         return True
     age = (datetime.now(UTC) - started).total_seconds()

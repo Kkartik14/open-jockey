@@ -131,6 +131,47 @@ def test_schema_migration_adds_claim_token_to_old_db(tmp_path: Path) -> None:
     assert "claim_token" in cols, f"migration did not add claim_token; columns: {sorted(cols)}"
 
 
+def test_schema_migration_adds_track_profiles_to_old_db(tmp_path: Path) -> None:
+    """A pre-v5 DB without track_profiles should pick up the new table on
+    next open. Existing tracks remain intact and queryable through the new
+    profile repo (which just returns None for tracks without a profile)."""
+    import sqlite3
+
+    db_path = tmp_path / "legacy_no_profiles.db"
+    legacy = sqlite3.connect(db_path)
+    legacy.executescript(
+        """
+        CREATE TABLE tracks (
+            content_hash TEXT PRIMARY KEY,
+            source_path TEXT NOT NULL,
+            duration_sec REAL,
+            genre TEXT,
+            last_seen TEXT,
+            created_at TEXT
+        );
+        INSERT INTO tracks(content_hash, source_path)
+            VALUES ('cc' || hex(randomblob(31)), '/tmp/legacy.wav');
+        """
+    )
+    legacy.commit()
+    legacy.close()
+
+    db.reset_for_tests(db_path)
+    tables = {
+        row["name"]
+        for row in db.fetch_all(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    assert "track_profiles" in tables
+
+    # Existing tracks still readable; the new table starts empty.
+    surviving = db.fetch_all("SELECT content_hash FROM tracks")
+    assert len(surviving) == 1
+    empty = db.fetch_all("SELECT * FROM track_profiles")
+    assert empty == []
+
+
 def test_schema_migration_adds_genre_to_old_tracks_table(tmp_path: Path) -> None:
     """A pre-v4 DB whose ``tracks`` table predates the genre column should
     migrate in place rather than crashing on the first SELECT."""
