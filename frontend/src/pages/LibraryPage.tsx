@@ -3,7 +3,7 @@
  *
  * Track rows now link to /track/:hash, where the per-track view lives.
  */
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   api,
@@ -35,21 +35,42 @@ export function LibraryPage() {
     ingestPath,
   } = state;
 
-  async function refresh() {
+  // mountedRef + seqRef mirror the pattern in TrackDetailPage: drop responses
+  // from in-flight requests after unmount, and from older refresh cycles that
+  // resolve after a newer one already ran. Without this, a refresh started
+  // before unmount can land state on a dead component, or a slow first refresh
+  // can clobber a fresher second one.
+  const mountedRef = useRef(true);
+  const refreshSeqRef = useRef(0);
+
+  async function refresh(signal?: AbortSignal) {
+    const seq = ++refreshSeqRef.current;
+    const opts = signal ? { signal } : undefined;
     const [healthResult, pluginsResult, tracksResult, jobsResult, rollupResult] =
       await Promise.allSettled([
-        api.health(),
-        api.listPlugins(),
-        api.listTracks(),
-        api.listJobs(),
-        api.getLabelRollup(),
+        api.health(opts),
+        api.listPlugins(opts),
+        api.listTracks(opts),
+        api.listJobs(opts),
+        api.getLabelRollup(opts),
       ]);
+    if (
+      !mountedRef.current ||
+      seq !== refreshSeqRef.current ||
+      (signal?.aborted ?? false)
+    ) {
+      return;
+    }
     const patch: Partial<LibraryState> = {};
 
     if (healthResult.status === "fulfilled") {
       patch.health = healthResult.value;
       patch.healthErr = null;
     } else {
+      // Clear stale healthy state — if the latest probe failed, the UI must
+      // not keep displaying the *previous* successful response as if it were
+      // current. The error message takes the slot instead.
+      patch.health = null;
       patch.healthErr = errorMessage(healthResult.reason);
     }
 
@@ -82,9 +103,15 @@ export function LibraryPage() {
   }
 
   useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 5000);
-    return () => clearInterval(t);
+    mountedRef.current = true;
+    const controller = new AbortController();
+    refresh(controller.signal);
+    const t = setInterval(() => refresh(controller.signal), 5000);
+    return () => {
+      mountedRef.current = false;
+      controller.abort();
+      clearInterval(t);
+    };
   }, []);
 
   async function pingPlugin(name: string) {
@@ -186,6 +213,7 @@ export function LibraryPage() {
             onChange={(e) => dispatchLibrary({ ingestPath: e.target.value })}
             onKeyDown={(e) => e.key === "Enter" && ingest()}
             placeholder="absolute path to an audio file (or any file for now)"
+            aria-label="Path to local audio file to ingest"
             className="flex-1 rounded border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm font-mono placeholder-zinc-600 focus:border-zinc-600 focus:outline-none"
           />
           <button

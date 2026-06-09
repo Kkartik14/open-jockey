@@ -16,10 +16,23 @@ from aidj.store.models import AnalysisStatus
 
 def test_fetch_during_transaction_does_not_interleave(tmp_aidj, sample_file: Path) -> None:
     """While one thread is mid-transaction, another thread doing fetch_* should
-    block on _db_lock rather than executing inside the transaction."""
+    block on _db_lock rather than executing inside the transaction.
+
+    The previous version only checked ``not fetcher_done.is_set()`` once after
+    a single ``inside_tx.wait()``, which could trivially pass if the fetcher
+    thread hadn't been scheduled yet — a no-op assertion. This version:
+
+      1. waits for the fetcher to *positively signal* it is about to call
+         ``fetch_all`` (so we know the next thing it does is the blocking op),
+      2. then asserts ``fetcher_done.wait(0.3) is False`` — a real, positive
+         claim that the fetcher remained blocked for ~300ms while the writer
+         held the lock. Without the lock, ``fetch_all`` would complete in
+         microseconds and ``wait`` would return True.
+    """
     track = tracks.ingest(sample_file)
 
     inside_tx = threading.Event()
+    fetcher_about_to_block = threading.Event()
     fetcher_done = threading.Event()
     proceed = threading.Event()
 
@@ -32,19 +45,16 @@ def test_fetch_during_transaction_does_not_interleave(tmp_aidj, sample_file: Pat
                 (track.content_hash, "echo", "0.1.0", AnalysisStatus.RUNNING.value),
             )
             inside_tx.set()
-            # Hold the transaction until the fetcher has had a chance to try.
+            # Hold the transaction until we are told to release.
             proceed.wait(timeout=2.0)
 
     def fetcher() -> None:
         inside_tx.wait(timeout=2.0)
-        # This must block on _db_lock (held by writer) — only completes after
-        # the writer commits and releases.
+        fetcher_about_to_block.set()
         rows = db.fetch_all(
             "SELECT * FROM analysis_runs WHERE track_hash=?",
             (track.content_hash,),
         )
-        # By the time we get here, the transaction has committed and the row
-        # is visible.
         assert any(dict(r)["analyzer_name"] == "echo" for r in rows)
         fetcher_done.set()
 
@@ -53,10 +63,15 @@ def test_fetch_during_transaction_does_not_interleave(tmp_aidj, sample_file: Pat
     w.start()
     f.start()
 
-    # Give the fetcher a moment to actually call fetch_all and block.
     inside_tx.wait(timeout=2.0)
-    # The fetcher should NOT have completed yet — it's blocked on _db_lock.
-    assert not fetcher_done.is_set()
+    fetcher_about_to_block.wait(timeout=2.0)
+    # Positive assertion: fetch_all stays blocked for ~300ms while the writer
+    # holds the lock. ``Event.wait(timeout)`` returns False iff the event was
+    # not set within the timeout — exactly what we want to assert here.
+    assert not fetcher_done.wait(0.3), (
+        "fetch_all completed while writer held the immediate-tx lock — "
+        "_db_lock is not actually serialising"
+    )
 
     # Release the writer; the fetcher proceeds.
     proceed.set()

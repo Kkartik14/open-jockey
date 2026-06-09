@@ -346,6 +346,7 @@ function TrackMetadataSection({
             }}
             placeholder="(unset)"
             maxLength={100}
+            aria-label="Track genre"
             className="w-48 rounded bg-zinc-800 px-2 py-0.5 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-600"
           />
           {(track.genre ?? "") !== genreDraft.trim() && (
@@ -439,6 +440,7 @@ function RunAnalyzerSection({
         <select
           value={selectedAnalyzer}
           onChange={(e) => onAnalyzerChange(e.target.value)}
+          aria-label="Choose analyzer to run on this track"
           className="rounded border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm font-mono"
         >
           <option value="">select analyzer…</option>

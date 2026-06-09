@@ -270,3 +270,134 @@ def test_peaks_503_when_ffmpeg_unavailable(
         r = client.get(f"/api/tracks/{track.content_hash}/peaks")
     assert r.status_code == 503
     assert "ffmpeg" in r.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Track profile endpoints (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def _beatgrid_output(*, bpm: float = 124.0, n_beats: int = 8) -> dict:
+    return {
+        "tempo": {"bpm": bpm},
+        "beats": [
+            {"time_sec": round(i * 0.5, 3), "is_downbeat": (i % 4 == 0)}
+            for i in range(n_beats)
+        ],
+        "sections": [{"start_sec": 0.0, "end_sec": 4.0, "label": "intro"}],
+        "duration_sec": round(n_beats * 0.5, 3),
+    }
+
+
+def _upsert_completed_run(track_hash: str, analyzer: str, version: str, output: dict):
+    from aidj.store import analysis_runs as ar_module
+    from aidj.store.models import AnalysisStatus
+
+    return ar_module.upsert(
+        track_hash=track_hash,
+        analyzer_name=analyzer,
+        analyzer_version=version,
+        status=AnalysisStatus.COMPLETED,
+        output=output,
+        started_at="2026-01-01 00:00:00",
+        finished_at="2026-01-01 00:00:01",
+    )
+
+
+def test_get_profile_404_for_unknown_track(client: TestClient) -> None:
+    r = client.get("/api/tracks/" + ("0" * 64) + "/profile")
+    assert r.status_code == 404
+    assert "track not found" in r.json()["detail"]
+
+
+def test_get_profile_404_when_track_exists_but_no_profile(
+    client: TestClient, sample_file: Path
+) -> None:
+    """Distinct 404 message: the track is there, the profile isn't — caller
+    needs to build, not ingest."""
+    track = tracks.ingest(sample_file)
+    r = client.get(f"/api/tracks/{track.content_hash}/profile")
+    assert r.status_code == 404
+    assert "no profile" in r.json()["detail"]
+
+
+def test_post_profile_build_404_for_unknown_track(client: TestClient) -> None:
+    """Builder raises TrackNotFoundError; the route maps it to 404 instead of
+    leaking the underlying SQLite IntegrityError."""
+    r = client.post("/api/tracks/" + ("0" * 64) + "/profile/build")
+    assert r.status_code == 404
+    assert "not found" in r.json()["detail"]
+
+
+def test_post_profile_build_blocks_when_no_runs(
+    client: TestClient, sample_file: Path
+) -> None:
+    """An ingested-but-unanalyzed track yields a persisted blocked profile —
+    coverage can distinguish 'tried, unusable' from 'never built'."""
+    track = tracks.ingest(sample_file)
+    r = client.post(f"/api/tracks/{track.content_hash}/profile/build")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["readiness"] == "blocked"
+    assert body["tempo"] is None and body["beat_grid"] is None
+    assert body["completeness_score"] == 0.0
+
+
+def test_post_profile_build_partial_from_completed_librosa_run(
+    client: TestClient, sample_file: Path
+) -> None:
+    track = tracks.ingest(sample_file)
+    _upsert_completed_run(track.content_hash, "librosa", "0.1.0", _beatgrid_output(bpm=128.0))
+
+    r = client.post(f"/api/tracks/{track.content_hash}/profile/build")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["readiness"] == "partial"
+    assert body["tempo"]["bpm"] == 128.0
+    assert body["beat_grid"]["provenance"]["source"] == "librosa@0.1.0"
+
+
+def test_post_profile_build_force_reselects_when_staleness_would_not(
+    client: TestClient, sample_file: Path
+) -> None:
+    """The route always uses force=True. Adding a higher-priority analyzer run
+    whose finished_at predates built_at would NOT trigger staleness — yet POST
+    must still pick the higher-priority source. This proves the force=True wire."""
+    track = tracks.ingest(sample_file)
+    _upsert_completed_run(track.content_hash, "librosa", "0.1.0", _beatgrid_output(bpm=100.0))
+
+    first = client.post(f"/api/tracks/{track.content_hash}/profile/build").json()
+    assert first["beat_grid"]["provenance"]["source"] == "librosa@0.1.0"
+
+    # Past-dated finished_at → staleness check would say "not stale"; force=True
+    # must override.
+    _upsert_completed_run(track.content_hash, "allin1_remote", "0.1.0", _beatgrid_output(bpm=128.0))
+
+    second = client.post(f"/api/tracks/{track.content_hash}/profile/build").json()
+    assert second["beat_grid"]["provenance"]["source"] == "allin1_remote@0.1.0"
+    assert second["tempo"]["bpm"] == 128.0
+
+
+def test_profile_coverage_buckets_are_exhaustive(
+    client: TestClient, tmp_path: Path
+) -> None:
+    # Three ingested tracks; one blocked, one partial, one with no profile.
+    a = tmp_path / "a.bin"
+    b = tmp_path / "b.bin"
+    c = tmp_path / "c.bin"
+    a.write_bytes(b"a" * 32)
+    b.write_bytes(b"b" * 32)
+    c.write_bytes(b"c" * 32)
+    ta = tracks.ingest(a)
+    tb = tracks.ingest(b)
+    tracks.ingest(c)  # missing — never built
+
+    # ta: build with no runs → blocked.
+    client.post(f"/api/tracks/{ta.content_hash}/profile/build")
+    # tb: librosa run → partial.
+    _upsert_completed_run(tb.content_hash, "librosa", "0.1.0", _beatgrid_output())
+    client.post(f"/api/tracks/{tb.content_hash}/profile/build")
+
+    r = client.get("/api/profiles/coverage")
+    assert r.status_code == 200
+    assert r.json() == {"ready": 0, "partial": 1, "blocked": 1, "missing": 1}

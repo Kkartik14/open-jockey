@@ -98,73 +98,268 @@ export type LabelRollup = {
   total_labeled_runs: number;
 };
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+// ---------------------------------------------------------------------------
+// TrackProfile (Phase 2) — hand-mirrored from backend/aidj/store/models.py.
+// If these drift, run the listed tests on both sides; OpenAPI codegen is the
+// right long-term fix.
+// ---------------------------------------------------------------------------
+
+export type FieldProvenance = {
+  source: string;
+  analysis_run_id: number | null;
+};
+
+export type TempoBlock = {
+  bpm: number;
+  confidence: number | null;
+  provenance: FieldProvenance;
+};
+
+export type BeatMarkProfile = {
+  time_sec: number;
+  is_downbeat: boolean;
+  confidence: number | null;
+};
+
+export type BeatGridBlock = {
+  beats: BeatMarkProfile[];
+  downbeat_count: number;
+  duration_sec: number;
+  provenance: FieldProvenance;
+};
+
+export type KeyBlock = {
+  key: string;
+  scale: string;
+  camelot: string | null;
+  confidence: number | null;
+  provenance: FieldProvenance;
+};
+
+export type SectionItemProfile = {
+  start_sec: number;
+  end_sec: number;
+  label: string;
+  confidence: number | null;
+};
+
+export type SectionsBlock = {
+  items: SectionItemProfile[];
+  provenance: FieldProvenance;
+};
+
+export type EnergyBlock = {
+  sample_rate_hz: number;
+  values: number[];
+  integrated_lufs: number | null;
+  section_energy: Record<string, number>;
+  drop_times_sec: number[];
+  build_times_sec: number[];
+  provenance: FieldProvenance;
+};
+
+export type VocalWindowProfile = {
+  start_sec: number;
+  end_sec: number;
+  is_vocal: boolean;
+  confidence: number | null;
+};
+
+export type VocalsBlock = {
+  windows: VocalWindowProfile[];
+  stem_cache_key: string | null;
+  provenance: FieldProvenance;
+};
+
+export type CompletenessFields = {
+  has_beat_grid: boolean;
+  has_key: boolean;
+  has_sections: boolean;
+  has_energy: boolean;
+  has_vocals: boolean;
+};
+
+export type Readiness = "ready" | "partial" | "blocked";
+
+export type TrackProfile = {
+  profile_version: number;
+  track_hash: string;
+  built_at: string;
+  readiness: Readiness;
+  completeness_score: number;
+  fields: CompletenessFields;
+  tempo: TempoBlock | null;
+  beat_grid: BeatGridBlock | null;
+  key: KeyBlock | null;
+  sections: SectionsBlock | null;
+  energy: EnergyBlock | null;
+  vocals: VocalsBlock | null;
+};
+
+export type ProfileCoverage = {
+  ready: number;
+  partial: number;
+  blocked: number;
+  missing: number;
+};
+
+/**
+ * Per-request options. ``signal`` cancels the fetch when an AbortController is
+ * aborted (cleanup on unmount). ``timeoutMs`` aborts on a deadline — useful
+ * for /peaks, which decodes a whole audio file and can take seconds.
+ */
+export type RequestOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
+function mergeSignals(opts: RequestOptions | undefined): {
+  signal: AbortSignal | undefined;
+  cleanup: () => void;
+} {
+  if (!opts || (!opts.signal && !opts.timeoutMs)) {
+    return { signal: undefined, cleanup: () => {} };
   }
-  return res.json() as Promise<T>;
+  if (opts.timeoutMs === undefined) {
+    return { signal: opts.signal, cleanup: () => {} };
+  }
+  // Compose caller signal + timeout into one controller.
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new Error(`request timed out after ${opts.timeoutMs}ms`)),
+    opts.timeoutMs,
+  );
+  if (opts.signal) {
+    if (opts.signal.aborted) {
+      controller.abort(opts.signal.reason);
+    } else {
+      opts.signal.addEventListener(
+        "abort",
+        () => controller.abort(opts.signal!.reason),
+        { once: true },
+      );
+    }
+  }
+  return {
+    signal: controller.signal,
+    cleanup: () => clearTimeout(timer),
+  };
+}
+
+async function req<T>(
+  path: string,
+  init?: RequestInit,
+  opts?: RequestOptions,
+): Promise<T> {
+  const { signal, cleanup } = mergeSignals(opts);
+  try {
+    const res = await fetch(`/api${path}`, {
+      headers: { "Content-Type": "application/json" },
+      signal,
+      ...init,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`${res.status} ${res.statusText}: ${text}`);
+    }
+    return (await res.json()) as T;
+  } finally {
+    cleanup();
+  }
 }
 
 export const api = {
-  health: () => req<Health>("/health"),
-  listPlugins: () => req<Plugin[]>("/plugins"),
-  callPlugin: (name: string, method: string, params: unknown = {}) =>
-    req<{ result: unknown }>(`/plugins/${name}/call`, {
-      method: "POST",
-      body: JSON.stringify({ method, params }),
-    }),
-  ingestTrack: (path: string) =>
-    req<Track>("/tracks/ingest", {
-      method: "POST",
-      body: JSON.stringify({ path }),
-    }),
-  listTracks: () => req<Track[]>("/tracks"),
-  getTrack: (hash: string) => req<Track>(`/tracks/${hash}`),
+  health: (opts?: RequestOptions) => req<Health>("/health", undefined, opts),
+  listPlugins: (opts?: RequestOptions) =>
+    req<Plugin[]>("/plugins", undefined, opts),
+  callPlugin: (name: string, method: string, params: unknown = {}, opts?: RequestOptions) =>
+    req<{ result: unknown }>(
+      `/plugins/${name}/call`,
+      { method: "POST", body: JSON.stringify({ method, params }) },
+      opts,
+    ),
+  ingestTrack: (path: string, opts?: RequestOptions) =>
+    req<Track>(
+      "/tracks/ingest",
+      { method: "POST", body: JSON.stringify({ path }) },
+      opts,
+    ),
+  listTracks: (opts?: RequestOptions) =>
+    req<Track[]>("/tracks", undefined, opts),
+  getTrack: (hash: string, opts?: RequestOptions) =>
+    req<Track>(`/tracks/${hash}`, undefined, opts),
   /** Patch a track's user-editable metadata. Today only ``genre``. */
-  setTrackGenre: (hash: string, genre: string | null) =>
-    req<Track>(`/tracks/${hash}`, {
-      method: "PATCH",
-      body: JSON.stringify({ genre }),
-    }),
+  setTrackGenre: (hash: string, genre: string | null, opts?: RequestOptions) =>
+    req<Track>(
+      `/tracks/${hash}`,
+      { method: "PATCH", body: JSON.stringify({ genre }) },
+      opts,
+    ),
   /** Streaming URL the <audio> element can point at directly (range-served). */
   audioUrl: (hash: string) => `/api/tracks/${hash}/audio`,
-  /** Precomputed peaks + duration so WaveSurfer doesn't decode the whole audio. */
-  getPeaks: (hash: string, samples = 2048) =>
-    req<Peaks>(`/tracks/${hash}/peaks?samples=${samples}`),
+  /** Precomputed peaks + duration so WaveSurfer doesn't decode the whole audio.
+   *  Decoding can take a few seconds on long tracks — pass a signal/timeoutMs
+   *  to abort if the user navigates away or the request hangs. */
+  getPeaks: (hash: string, samples = 2048, opts?: RequestOptions) =>
+    req<Peaks>(`/tracks/${hash}/peaks?samples=${samples}`, undefined, opts),
   analyzeTrack: (
     hash: string,
     analyzer: string,
     body: { force?: boolean; timeout?: number | null } = {},
+    opts?: RequestOptions,
   ) =>
-    req<AnalysisRun>(`/tracks/${hash}/analyze/${analyzer}`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
-  listAnalyses: (hash: string) => req<AnalysisRun[]>(`/tracks/${hash}/analyses`),
-  listLabels: (runId: number) =>
-    req<AnalysisLabel[]>(`/analyses/${runId}/labels`),
-  addLabel: (runId: number, kind: AnalysisLabelKind, notes?: string) =>
-    req<AnalysisLabel>(`/analyses/${runId}/labels`, {
-      method: "POST",
-      body: JSON.stringify({ kind, notes }),
-    }),
-  deleteLabel: (runId: number, labelId: number) =>
-    fetch(`/api/analyses/${runId}/labels/${labelId}`, { method: "DELETE" }).then(
-      (r) => {
-        if (!r.ok && r.status !== 204) throw new Error(`${r.status} ${r.statusText}`);
-      },
+    req<AnalysisRun>(
+      `/tracks/${hash}/analyze/${analyzer}`,
+      { method: "POST", body: JSON.stringify(body) },
+      opts,
     ),
-  enqueueJob: (kind: string, payload: unknown = {}) =>
-    req<{ id: number }>("/jobs", {
-      method: "POST",
-      body: JSON.stringify({ kind, payload }),
-    }),
-  listJobs: () => req<Job[]>("/jobs"),
+  listAnalyses: (hash: string, opts?: RequestOptions) =>
+    req<AnalysisRun[]>(`/tracks/${hash}/analyses`, undefined, opts),
+  listLabels: (runId: number, opts?: RequestOptions) =>
+    req<AnalysisLabel[]>(`/analyses/${runId}/labels`, undefined, opts),
+  addLabel: (runId: number, kind: AnalysisLabelKind, notes?: string, opts?: RequestOptions) =>
+    req<AnalysisLabel>(
+      `/analyses/${runId}/labels`,
+      { method: "POST", body: JSON.stringify({ kind, notes }) },
+      opts,
+    ),
+  deleteLabel: (runId: number, labelId: number, opts?: RequestOptions) => {
+    const { signal, cleanup } = mergeSignals(opts);
+    return fetch(`/api/analyses/${runId}/labels/${labelId}`, {
+      method: "DELETE",
+      signal,
+    })
+      .then((r) => {
+        if (!r.ok && r.status !== 204) throw new Error(`${r.status} ${r.statusText}`);
+      })
+      .finally(cleanup);
+  },
+  enqueueJob: (kind: string, payload: unknown = {}, opts?: RequestOptions) =>
+    req<{ id: number }>(
+      "/jobs",
+      { method: "POST", body: JSON.stringify({ kind, payload }) },
+      opts,
+    ),
+  listJobs: (opts?: RequestOptions) => req<Job[]>("/jobs", undefined, opts),
   /** Cross-track bake-off rollup (per-analyzer and per-analyzer-per-genre). */
-  getLabelRollup: () => req<LabelRollup>("/labels/rollup"),
+  getLabelRollup: (opts?: RequestOptions) =>
+    req<LabelRollup>("/labels/rollup", undefined, opts),
+
+  // -------------------------------------------------------------------------
+  // Track profiles (Phase 2)
+  // -------------------------------------------------------------------------
+
+  /** Read-only fetch — 404 distinguishes "track missing" from "profile missing". */
+  getProfile: (hash: string, opts?: RequestOptions) =>
+    req<TrackProfile>(`/tracks/${hash}/profile`, undefined, opts),
+  /** Synchronous rebuild — always force=true on the backend; no body. */
+  buildProfile: (hash: string, opts?: RequestOptions) =>
+    req<TrackProfile>(
+      `/tracks/${hash}/profile/build`,
+      { method: "POST" },
+      opts,
+    ),
+  /** Library-wide coverage bucket counts (ready+partial+blocked+missing = total). */
+  getProfileCoverage: (opts?: RequestOptions) =>
+    req<ProfileCoverage>("/profiles/coverage", undefined, opts),
 };

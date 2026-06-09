@@ -10,8 +10,22 @@ from aidj.logging_config import setup as setup_logging
 log = logging.getLogger("aidj.cli")
 
 
+_LOCALHOST_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
+
+    if args.host not in _LOCALHOST_HOSTS:
+        # The API has no auth and treats every caller as trusted: it can ingest
+        # any local file by path and stream its bytes back. Binding to anything
+        # other than loopback exposes that surface to the network.
+        log.warning(
+            "binding API to %s — the ingest + audio-stream endpoints become "
+            "remotely reachable. The API has no authentication; only bind "
+            "non-loopback on a network you control.",
+            args.host,
+        )
 
     uvicorn.run(
         "aidj.api.main:app",
@@ -36,9 +50,10 @@ def cmd_info(args: argparse.Namespace) -> int:
     print(f"plugins_root: {s.plugins_root}")
     print("schema:       initialized")
     print("plugins:")
+    # ``version`` lives on LoadedManifest (sourced from pyproject), not on the
+    # YAML Manifest — older code read ``lm.manifest.version`` and crashed.
     for lm in registry().manifests():
-        m = lm.manifest
-        print(f"  - {m.name}@{m.version} ({m.entrypoint_module})")
+        print(f"  - {lm.name}@{lm.version} ({lm.manifest.entrypoint_module})")
     return 0
 
 

@@ -1,8 +1,8 @@
 # open-jockey
 
-> A personal, local-first AI DJ. Point it at a folder of music, get back a continuous DJ-style mix. Audio never leaves your machine.
+> A personal, local-first AI DJ — *in active development*. Goal: point it at a folder of music, get back a continuous DJ-style mix, with audio never leaving your machine. **Today the analyzer/labeling/profile layers exist; the mixing layers (Candidate Graph, Planner, Renderer) do not. The tool cannot produce a mix yet.**
 
-Most people have music they love but don't have the time, ear, or DJ training to turn it into a proper mix. open-jockey does the analysis, planning, and rendering locally so a folder of songs becomes a continuous set without manual beatmatching, cue points, or transition planning.
+The design splits the work into four layers (see [How it works](#how-it-works)). When complete, open-jockey will do the analysis, planning, and rendering locally so a folder of songs becomes a continuous set without manual beatmatching, cue points, or transition planning. The diagram below describes the *design target*; the [Status](#status) and [Roadmap](#roadmap) sections describe what's actually built today.
 
 ## Why local-first
 
@@ -12,17 +12,28 @@ Most people have music they love but don't have the time, ear, or DJ training to
 
 ## Status
 
-**Phase 1 done, Phase 2 in progress.**
+**Phase 0 + Phase 1 done. Phase 2 partly done. Phases 3–7 not started.**
 
-- ✅ Phase 0 foundation (project store, plugin runtime, FastAPI app, frontend).
-- ✅ Phase 1: `BeatGridAnalysis` + `KeyAnalysis` schemas, `analysis_runs` repo, analyze API routes, plugins (`allin1`, `allin1_remote`, `librosa`, `essentia`; `madmom_msaf` quarantined), dual beat-grid UI with click-track verification, structured failure-mode labels, per-analyzer + per-genre rollup table. Running the bake-off on real tracks is user activity.
-- 🚧 Phase 2 — Canonical Track Intelligence: contract + `track_profiles` persistence landing now (step 1 of 8). Profile builder, energy analyzer, lazy demucs + vocal windows, batch profile build, and profile-coverage UI follow.
+What's actually built today:
+
+- ✅ Phase 0 foundation — project store (SQLite + content-addressed cache), plugin runtime (uv-managed subprocess per plugin), FastAPI app, React/Vite frontend, full pytest suite.
+- ✅ Phase 1 analyzer pipeline — `BeatGridAnalysis` + `KeyAnalysis` schemas, atomic `analysis_runs` lifecycle (claim-token, force, stale recovery), analyze API + dual beat-grid UI with click-track verification, 8 structured failure-mode labels with per-analyzer / per-genre rollup. Plugins: `allin1` (local — currently broken on `madmom` import; quarantined behind `allin1_remote`), `allin1_remote` (Modal GPU, cloud-audio-gated), `librosa` (local baseline), `essentia` (locked, real-hardware run unverified). `madmom_msaf` quarantined.
+- 🚧 Phase 2 — Canonical Track Intelligence (3 of 8 steps in): `TrackProfile` contract + provenance + readiness, `track_profiles` repository, deterministic profile builder, thin profile API (`GET/POST .../profile`, `GET /profiles/coverage`). **Still to do**: energy analyzer, lazy demucs + vocal windows, batch profile build, profile-coverage UI, label-driven analyzer selection. **No real-track listening test has been run yet** — see `private/plan.md`.
+
+What's NOT built and what the architecture diagram below describes as *design intent* only:
+
+- ❌ Phase 3 Transition Candidate Graph
+- ❌ Phase 4 Renderer / automation envelopes (no mix has ever been produced)
+- ❌ Phase 5 Planner (LLM or local heuristic)
+- ❌ Phases 6–7 plan editing UI, polish
+
+The `projects`, `candidates`, and `stems` SQLite tables exist as empty stubs to reserve the schema; no code populates them yet.
 
 See [Roadmap](#roadmap) for the full table.
 
 ## How it works
 
-Four layers, with the **Transition Candidate Graph** acting as a hard contract between deterministic analysis and the non-deterministic LLM:
+**Design target (not all layers built — see [Status](#status)).** Four layers, with the **Transition Candidate Graph** acting as a hard contract between deterministic analysis and the non-deterministic LLM. Today only the Project Store and Analyzer (+ the in-progress canonical `TrackProfile` layer on top) exist; Candidate Graph, Planner, and Renderer are the still-to-do work:
 
 ```
                 +------------------------------------+

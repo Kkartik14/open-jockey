@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aidj import __version__
 from aidj.audio import peaks as audio_peaks
@@ -24,20 +24,41 @@ from aidj.config import settings
 from aidj.plugins.manifest import Hardware
 from aidj.plugins.registry import registry
 from aidj.plugins.runtime import Plugin, PluginError
-from aidj.store import analysis_labels, analysis_runs, db, jobs, tracks
+from aidj.profile_builder import TrackNotFoundError, build_profile
+from aidj.store import analysis_labels, analysis_runs, db, jobs, track_profiles, tracks
 from aidj.store.models import (
     AnalysisLabel,
     AnalysisLabelKind,
     AnalysisRun,
+    BeatGridAnalysis,
     Job,
     JobStatus,
+    KeyAnalysis,
     Track,
+    TrackProfile,
 )
 
 CLOUD_AUDIO_OPT_IN_ENV = "AIDJ_ALLOW_CLOUD_AUDIO"
 # RUNNING rows older than ``2 * default_timeout`` are treated as stale (the
 # backend probably crashed mid-run); the next analyze call auto-recovers.
 _STALE_TIMEOUT_MULTIPLIER = 2.0
+
+# Per-analyzer expected output schema. Validated once at the API boundary so
+# downstream code (profile_builder, frontend parsers) inherits the guarantee
+# instead of each layer re-implementing defensive parsing. Analyzers not in
+# this map pass through unvalidated — the contract is opt-in per plugin name.
+_ANALYZER_OUTPUT_SCHEMAS: dict[str, type[BaseModel]] = {
+    "allin1": BeatGridAnalysis,
+    "allin1_remote": BeatGridAnalysis,
+    "librosa": BeatGridAnalysis,
+    "essentia": KeyAnalysis,
+}
+
+# Methods that bypass the analyze lifecycle if reached via the generic
+# plugin-call endpoint (no track lookup, no claim, no cloud-audio gate, no
+# fail_run persistence). They MUST be invoked through
+# ``POST /api/tracks/{hash}/analyze/{name}`` instead.
+_RPC_RESERVED_METHODS: frozenset[str] = frozenset({"analyze"})
 
 # Used by the audio-streaming endpoint to set Content-Type from the file's
 # extension. Anything not in this map falls back to ``application/octet-stream``
@@ -154,6 +175,19 @@ class AddLabelRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
 
 
+class ProfileCoverageResponse(BaseModel):
+    """Library-wide ``TrackProfile`` coverage. Drives the readiness summary.
+
+    Buckets are exhaustive: ``ready + partial + blocked + missing`` equals the
+    total number of ingested tracks. A track without a persisted profile
+    counts as ``missing``.
+    """
+    ready: int = Field(ge=0)
+    partial: int = Field(ge=0)
+    blocked: int = Field(ge=0)
+    missing: int = Field(ge=0)
+
+
 class LabelRollupResponse(BaseModel):
     """Cross-track bake-off rollup. Drives the Library page's rollup table.
 
@@ -238,10 +272,41 @@ def list_plugins() -> list[PluginInfo]:
 
 @app.post("/api/plugins/{name}/call", response_model=PluginCallResponse)
 def call_plugin(name: str, body: PluginCallRequest) -> PluginCallResponse:
+    """Generic plugin RPC for ``info``/``ping``/admin methods.
+
+    Deliberately NOT a way to run analysis: ``method="analyze"`` would skip
+    the track lookup, atomic claim/token lifecycle, persisted failure
+    handling, AND the cloud-audio opt-in gate — all of which the dedicated
+    ``POST /api/tracks/{hash}/analyze/{name}`` route enforces. Reject it here
+    so a misled caller can't bypass that surface.
+
+    The cloud-audio opt-in gate is enforced on this route too: a plugin
+    flagged ``cloud_audio: true`` may upload bytes on *any* method (not just
+    ``analyze``), so a missing opt-in must block the whole RPC, not just
+    ``analyze`` specifically.
+    """
+    if body.method in _RPC_RESERVED_METHODS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"method {body.method!r} must go through "
+                f"POST /api/tracks/{{hash}}/analyze/{{name}} (atomic claim, "
+                "claim-token-conditional terminal writes, cloud-audio gate, "
+                "persisted failure handling)."
+            ),
+        )
     try:
         plugin = registry().get(name)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if plugin.manifest.manifest.cloud_audio and not _cloud_audio_allowed():
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"plugin '{name}' is flagged cloud_audio; set "
+                f"{CLOUD_AUDIO_OPT_IN_ENV}=1 in the backend's environment to opt in."
+            ),
+        )
     try:
         result = plugin.call(body.method, body.params, timeout=body.timeout)
     except PluginError as exc:
@@ -389,6 +454,41 @@ def _cloud_audio_allowed() -> bool:
     return os.environ.get(CLOUD_AUDIO_OPT_IN_ENV, "").strip() == "1"
 
 
+def _validate_output_or_none(
+    analyzer_name: str, output: Any,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Enforce the per-analyzer output schema at the API boundary.
+
+    Returns ``(output_dict, None)`` when valid (or when no schema is registered
+    for this analyzer — opt-in by plugin name). Returns ``(None, error)`` when
+    a registered analyzer returns something that doesn't match its schema; the
+    caller persists that as a ``FAILED`` run rather than letting garbage land
+    in ``analysis_runs.output_json`` for the profile builder + frontend to
+    re-discover later.
+    """
+    schema = _ANALYZER_OUTPUT_SCHEMAS.get(analyzer_name)
+    if schema is None:
+        # Unknown plugin: pass through unchanged. The existing
+        # ``{"raw": ...}`` wrapping for non-dict output still happens at the
+        # caller — this function only enforces *known* contracts.
+        if not isinstance(output, dict):
+            return {"raw": output}, None
+        return output, None
+    if not isinstance(output, dict):
+        return None, (
+            f"{analyzer_name} returned a non-dict output "
+            f"(type={type(output).__name__}); expected {schema.__name__}"
+        )
+    try:
+        schema.model_validate(output)
+    except ValidationError as exc:
+        return None, (
+            f"{analyzer_name} output failed {schema.__name__} validation: "
+            f"{exc.errors(include_url=False, include_input=False)}"
+        )
+    return output, None
+
+
 @app.post(
     "/api/tracks/{content_hash}/analyze/{analyzer_name}",
     response_model=AnalysisRun,
@@ -482,13 +582,31 @@ def _execute_with_claim(
             finished_at=analysis_runs.utc_now_iso(),
         )
 
-    raw_confidence = output.get("confidence") if isinstance(output, dict) else None
+    validated, validation_error = _validate_output_or_none(plugin.name, output)
+    if validation_error is not None:
+        # The plugin succeeded at the wire level but produced output that
+        # violates its declared schema. Persist a FAILED run so the profile
+        # builder doesn't have to re-litigate this downstream.
+        log.warning(
+            "analyzer output validation failed: track=%s analyzer=%s err=%s",
+            track.content_hash[:12], plugin.name, validation_error,
+        )
+        return analysis_runs.fail_run(
+            track_hash=track.content_hash,
+            analyzer_name=plugin.name,
+            analyzer_version=version,
+            claim_token=claim_token,
+            error=validation_error,
+            finished_at=analysis_runs.utc_now_iso(),
+        )
+
+    raw_confidence = validated.get("confidence") if validated is not None else None
     return analysis_runs.complete_run(
         track_hash=track.content_hash,
         analyzer_name=plugin.name,
         analyzer_version=version,
         claim_token=claim_token,
-        output=output if isinstance(output, dict) else {"raw": output},
+        output=validated,
         confidence=_coerce_confidence(raw_confidence),
         finished_at=analysis_runs.utc_now_iso(),
     )
@@ -588,6 +706,64 @@ def get_label_rollup() -> LabelRollupResponse:
         by_analyzer_and_genre=analysis_labels.rollup_by_analyzer_and_genre(),
         total_labels=int(total_labels_row["n"]) if total_labels_row else 0,
         total_labeled_runs=int(total_runs_row["n"]) if total_runs_row else 0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Track profiles (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+@app.get(
+    "/api/tracks/{content_hash}/profile",
+    response_model=TrackProfile,
+)
+def get_track_profile(content_hash: str) -> TrackProfile:
+    """Read-only fetch of the persisted profile for a track.
+
+    Never builds on read — explicit builds go through
+    ``POST .../profile/build``. Two distinct 404s so the caller knows
+    whether to ingest first or build first.
+    """
+    if tracks.get(content_hash) is None:
+        raise HTTPException(status_code=404, detail=f"track not found: {content_hash}")
+    profile = track_profiles.get(content_hash)
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no profile for {content_hash[:12]}; build via POST .../profile/build",
+        )
+    return profile
+
+
+@app.post(
+    "/api/tracks/{content_hash}/profile/build",
+    response_model=TrackProfile,
+)
+def build_track_profile(content_hash: str) -> TrackProfile:
+    """Synchronously (re)build the canonical profile from current analyzer runs.
+
+    Always passes ``force=True``: an explicit user/API request must not depend
+    on second-resolution staleness — if a same-second analyzer completion
+    finishes after the profile is built, the next un-forced check would treat
+    the profile as fresh and return stale data. Force sidesteps that entirely.
+    Maps :class:`TrackNotFoundError` to 404.
+    """
+    try:
+        return build_profile(content_hash, force=True)
+    except TrackNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/profiles/coverage", response_model=ProfileCoverageResponse)
+def get_profile_coverage() -> ProfileCoverageResponse:
+    """Counts per readiness bucket plus ``missing`` for tracks without a profile."""
+    counts = track_profiles.coverage_counts()
+    return ProfileCoverageResponse(
+        ready=counts["ready"],
+        partial=counts["partial"],
+        blocked=counts["blocked"],
+        missing=counts["missing"],
     )
 
 
