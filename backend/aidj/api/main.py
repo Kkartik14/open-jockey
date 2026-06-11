@@ -5,6 +5,7 @@ output is validated. Domain models from ``aidj.store.models`` and
 ``aidj.plugins.manifest`` are used directly — no second copy of the wire shape
 lives in this module.
 """
+
 from __future__ import annotations
 
 import logging
@@ -121,6 +122,8 @@ class PluginInfo(BaseModel):
 
 
 class PluginCallRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     method: str
     params: dict[str, Any] = Field(default_factory=dict)
     timeout: float | None = Field(
@@ -135,6 +138,8 @@ class PluginCallResponse(BaseModel):
 
 
 class IngestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     path: str
 
 
@@ -145,12 +150,15 @@ class UpdateTrackRequest(BaseModel):
     growth — when more user-mutable fields land (e.g. a manual ``name``
     override), they get added here and dispatched in ``update_track``.
     """
+
     model_config = ConfigDict(extra="forbid")
 
     genre: str | None = Field(default=None, max_length=100)
 
 
 class EnqueueRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     kind: str
     payload: dict[str, Any] = Field(default_factory=dict)
     max_retries: int = 3
@@ -187,7 +195,12 @@ class PeaksResponse(BaseModel):
 
 
 class AnalyzeRequest(BaseModel):
-    force: bool = Field(default=False, description="Re-run even if a completed run for this analyzer version exists.")
+    model_config = ConfigDict(extra="forbid")
+
+    force: bool = Field(
+        default=False,
+        description="Re-run even if a completed run for this analyzer version exists.",
+    )
     timeout: float | None = Field(
         default=None,
         gt=0,
@@ -208,6 +221,8 @@ class AnalysisRunDetail(AnalysisRun):
 
 
 class AddLabelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     kind: AnalysisLabelKind
     notes: str | None = Field(default=None, max_length=500)
 
@@ -219,6 +234,7 @@ class ProfileCoverageResponse(BaseModel):
     total number of ingested tracks. A track without a persisted profile
     counts as ``missing``.
     """
+
     ready: int = Field(ge=0)
     partial: int = Field(ge=0)
     blocked: int = Field(ge=0)
@@ -233,6 +249,7 @@ class LabelRollupResponse(BaseModel):
     ``analysis_labels.UNTAGGED_GENRE``). Both come from the same labels table
     so the totals are consistent.
     """
+
     by_analyzer: dict[str, dict[AnalysisLabelKind, int]]
     by_analyzer_and_genre: dict[str, dict[str, dict[AnalysisLabelKind, int]]]
     total_labels: int
@@ -492,7 +509,8 @@ def _cloud_audio_allowed() -> bool:
 
 
 def _validate_output_or_none(
-    analyzer_name: str, output: Any,
+    analyzer_name: str,
+    output: Any,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Enforce the per-analyzer output schema at the API boundary.
 
@@ -608,7 +626,10 @@ def _execute_with_claim(
     except PluginError as exc:
         log.warning(
             "analysis failed: track=%s analyzer=%s code=%s msg=%s",
-            track.content_hash[:12], plugin.name, exc.code, exc.message,
+            track.content_hash[:12],
+            plugin.name,
+            exc.code,
+            exc.message,
         )
         return analysis_runs.fail_run(
             track_hash=track.content_hash,
@@ -626,7 +647,9 @@ def _execute_with_claim(
         # builder doesn't have to re-litigate this downstream.
         log.warning(
             "analyzer output validation failed: track=%s analyzer=%s err=%s",
-            track.content_hash[:12], plugin.name, validation_error,
+            track.content_hash[:12],
+            plugin.name,
+            validation_error,
         )
         return analysis_runs.fail_run(
             track_hash=track.content_hash,
@@ -655,10 +678,7 @@ def list_track_analyses(content_hash: str) -> list[AnalysisRunDetail]:
         raise HTTPException(status_code=404, detail=f"track not found: {content_hash}")
     runs = analysis_runs.list_for_track(content_hash)
     labels_map = analysis_labels.list_for_runs([r.id for r in runs])
-    return [
-        AnalysisRunDetail(**r.model_dump(), labels=labels_map.get(r.id, []))
-        for r in runs
-    ]
+    return [AnalysisRunDetail(**r.model_dump(), labels=labels_map.get(r.id, [])) for r in runs]
 
 
 @app.get(

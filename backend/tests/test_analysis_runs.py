@@ -1,4 +1,5 @@
 """Analysis-run repository: upsert, idempotency, version separation, listing."""
+
 from __future__ import annotations
 
 import pytest
@@ -103,12 +104,8 @@ def test_get_with_version_returns_exact_match(tmp_aidj, ingested_track) -> None:
         analyzer_version="0.1.0",
         status=AnalysisStatus.COMPLETED,
     )
-    assert analysis_runs.get(
-        ingested_track.content_hash, "echo", version="0.1.0"
-    ) is not None
-    assert analysis_runs.get(
-        ingested_track.content_hash, "echo", version="9.9.9"
-    ) is None
+    assert analysis_runs.get(ingested_track.content_hash, "echo", version="0.1.0") is not None
+    assert analysis_runs.get(ingested_track.content_hash, "echo", version="9.9.9") is None
 
 
 def test_get_completed_skips_non_completed(tmp_aidj, ingested_track) -> None:
@@ -119,9 +116,7 @@ def test_get_completed_skips_non_completed(tmp_aidj, ingested_track) -> None:
         status=AnalysisStatus.FAILED,
         error="boom",
     )
-    assert analysis_runs.get_completed(
-        ingested_track.content_hash, "echo", "0.1.0"
-    ) is None
+    assert analysis_runs.get_completed(ingested_track.content_hash, "echo", "0.1.0") is None
 
     analysis_runs.upsert(
         track_hash=ingested_track.content_hash,
@@ -130,9 +125,7 @@ def test_get_completed_skips_non_completed(tmp_aidj, ingested_track) -> None:
         status=AnalysisStatus.COMPLETED,
         output={"ok": True},
     )
-    completed = analysis_runs.get_completed(
-        ingested_track.content_hash, "echo", "0.1.0"
-    )
+    completed = analysis_runs.get_completed(ingested_track.content_hash, "echo", "0.1.0")
     assert completed is not None and completed.status is AnalysisStatus.COMPLETED
 
 

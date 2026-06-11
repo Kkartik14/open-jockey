@@ -3,6 +3,7 @@
 M3 (allin1 byproduct dirs) is verified by code inspection — exercising it
 requires actually running allin1 on real audio, which the test suite skips.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -98,9 +99,7 @@ def test_existing_running_row_short_circuits_without_calling_plugin(
     assert call_count == 0
 
 
-def test_failed_row_does_not_short_circuit(
-    client: TestClient, tmp_aidj, sample_file: Path
-) -> None:
+def test_failed_row_does_not_short_circuit(client: TestClient, tmp_aidj, sample_file: Path) -> None:
     """A previous FAILED run should not block a fresh attempt without ``force``."""
     track = tracks.ingest(sample_file)
     plugin_version = registry().get("echo").manifest.version
@@ -250,9 +249,13 @@ def test_analyze_route_drops_non_numeric_confidence(
     # Drive the plugin to inject a stringy confidence via the test hook.
     # The route does NOT pass extra params to plugin.analyze, so we have to
     # exercise the coercion via a direct plugin.call + manual upsert path.
-    raw_output = registry().get("echo").call(
-        "analyze",
-        {"audio_path": track.source_path, "confidence_override": "high"},
+    raw_output = (
+        registry()
+        .get("echo")
+        .call(
+            "analyze",
+            {"audio_path": track.source_path, "confidence_override": "high"},
+        )
     )
     assert raw_output["confidence"] == "high"
 

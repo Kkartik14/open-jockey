@@ -9,6 +9,7 @@ manifest with the resolved directory it lives in *and* the version read from
 the plugin's own ``pyproject.toml`` — that's the single source of truth for a
 plugin's version, so manifest YAML and ``__init__.py`` constants can't drift.
 """
+
 from __future__ import annotations
 
 import tomllib

@@ -2,6 +2,7 @@
 no structured-logging library, no JSON formatter, just consistent setup so every
 module uses the same handlers and levels.
 """
+
 from __future__ import annotations
 
 import logging

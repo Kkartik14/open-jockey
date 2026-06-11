@@ -5,6 +5,7 @@ from one thread could land inside another thread's in-flight transaction on
 the same connection. These tests verify the lock keeps that from happening
 under threading load.
 """
+
 from __future__ import annotations
 
 import json
@@ -174,10 +175,7 @@ def test_schema_migration_adds_track_profiles_to_old_db(tmp_path: Path) -> None:
 
     db.reset_for_tests(db_path)
     tables = {
-        row["name"]
-        for row in db.fetch_all(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
+        row["name"] for row in db.fetch_all("SELECT name FROM sqlite_master WHERE type='table'")
     }
     assert "track_profiles" in tables
 

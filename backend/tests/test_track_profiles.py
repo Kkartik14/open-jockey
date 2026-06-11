@@ -1,4 +1,5 @@
 """Track-profile repository + schema contract tests (Phase 2, step 1)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -35,7 +36,9 @@ def _ingested_track(tmp_path: Path, byte: bytes = b"x") -> str:
     return tracks.ingest(p).content_hash
 
 
-def _provenance(*, source: str = "allin1@1.1.0", analysis_run_id: int | None = None) -> FieldProvenance:
+def _provenance(
+    *, source: str = "allin1@1.1.0", analysis_run_id: int | None = None
+) -> FieldProvenance:
     return FieldProvenance(source=source, analysis_run_id=analysis_run_id)
 
 
@@ -49,8 +52,11 @@ def _minimal_beatgrid_profile(track_hash: str, *, run_id: int | None = None) -> 
         readiness=Readiness.PARTIAL,
         completeness_score=0.4,
         fields=CompletenessFields(
-            has_beat_grid=True, has_sections=True, has_key=False,
-            has_energy=False, has_vocals=False,
+            has_beat_grid=True,
+            has_sections=True,
+            has_key=False,
+            has_energy=False,
+            has_vocals=False,
         ),
         tempo=TempoBlock(bpm=124.0, confidence=0.83, provenance=prov),
         beat_grid=BeatGridBlock(
@@ -80,13 +86,18 @@ def test_health_reports_schema_v6(tmp_aidj) -> None:
 def test_upsert_then_get_roundtrips_full_profile(tmp_aidj, tmp_path: Path) -> None:
     track_hash = _ingested_track(tmp_path)
     profile = _minimal_beatgrid_profile(track_hash)
-    profile = profile.model_copy(update={
-        "fields": profile.fields.model_copy(update={"has_key": True}),
-        "key": KeyBlock(
-            key="C", scale="major", camelot="8B", confidence=0.7,
-            provenance=_provenance(source="essentia@0.1.0"),
-        ),
-    })
+    profile = profile.model_copy(
+        update={
+            "fields": profile.fields.model_copy(update={"has_key": True}),
+            "key": KeyBlock(
+                key="C",
+                scale="major",
+                camelot="8B",
+                confidence=0.7,
+                provenance=_provenance(source="essentia@0.1.0"),
+            ),
+        }
+    )
 
     track_profiles.upsert(profile)
     fetched = track_profiles.get(track_hash)
@@ -100,12 +111,17 @@ def test_upsert_revalidates_before_persisting(tmp_aidj, tmp_path: Path) -> None:
     must reject it before profile_json becomes the persistent source of truth."""
     track_hash = _ingested_track(tmp_path)
     profile = _minimal_beatgrid_profile(track_hash)
-    invalid = profile.model_copy(update={
-        "key": KeyBlock(
-            key="C", scale="major", camelot="8B", confidence=0.7,
-            provenance=_provenance(source="essentia@0.1.0"),
-        ),
-    })
+    invalid = profile.model_copy(
+        update={
+            "key": KeyBlock(
+                key="C",
+                scale="major",
+                camelot="8B",
+                confidence=0.7,
+                provenance=_provenance(source="essentia@0.1.0"),
+            ),
+        }
+    )
 
     try:
         track_profiles.upsert(invalid)
@@ -124,10 +140,12 @@ def test_upsert_is_idempotent_replaces_in_place(tmp_aidj, tmp_path: Path) -> Non
     track_profiles.upsert(first)
 
     # Same primary key, different readiness/score → replaces.
-    second = first.model_copy(update={
-        "readiness": Readiness.READY,
-        "completeness_score": 1.0,
-    })
+    second = first.model_copy(
+        update={
+            "readiness": Readiness.READY,
+            "completeness_score": 1.0,
+        }
+    )
     track_profiles.upsert(second)
 
     fetched = track_profiles.get(track_hash)
@@ -269,7 +287,8 @@ def test_is_stale_true_when_profile_version_below_current(tmp_aidj, tmp_path: Pa
 
 
 def test_is_stale_true_when_source_run_finished_after_profile(
-    tmp_aidj, tmp_path: Path,
+    tmp_aidj,
+    tmp_path: Path,
 ) -> None:
     """If an analyzer the profile cites has finished newer than ``built_at``,
     the profile is stale — the builder needs to re-pick its sources."""
@@ -299,7 +318,8 @@ def test_is_stale_true_when_source_run_finished_after_profile(
 
 
 def test_is_stale_true_when_unreferenced_run_finished_after_profile(
-    tmp_aidj, tmp_path: Path,
+    tmp_aidj,
+    tmp_path: Path,
 ) -> None:
     """A newer analyzer run can change source selection even if the old profile
     did not reference it, so any newer completed run for the track stales the
@@ -367,7 +387,8 @@ def test_coverage_counts_empty_when_no_tracks(tmp_aidj) -> None:
 
 
 def test_coverage_counts_buckets_tracks_without_profiles_as_missing(
-    tmp_aidj, tmp_path: Path,
+    tmp_aidj,
+    tmp_path: Path,
 ) -> None:
     a = _ingested_track(tmp_path, byte=b"a")
     b = _ingested_track(tmp_path, byte=b"b")

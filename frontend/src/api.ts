@@ -392,7 +392,7 @@ export const api = {
       signal,
     })
       .then((r) => {
-        if (!r.ok && r.status !== 204) throw new Error(`${r.status} ${r.statusText}`);
+        if (r.status !== 204) throw new Error(`${r.status} ${r.statusText}`);
       })
       .finally(cleanup);
   },
@@ -442,6 +442,17 @@ export const api = {
     req<Project[]>("/projects", undefined, opts),
   getProject: (projectId: number, opts?: RequestOptions) =>
     req<Project>(`/projects/${projectId}`, undefined, opts),
+  deleteProject: (projectId: number, opts?: RequestOptions) => {
+    const { signal, cleanup } = mergeSignals(opts);
+    return fetch(`/api/projects/${projectId}`, {
+      method: "DELETE",
+      signal,
+    })
+      .then((r) => {
+        if (r.status !== 204) throw new Error(`${r.status} ${r.statusText}`);
+      })
+      .finally(cleanup);
+  },
   buildCandidateGraph: (
     projectId: number,
     body: {

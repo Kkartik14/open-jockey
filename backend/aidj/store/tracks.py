@@ -1,4 +1,5 @@
 """Track repository — content-hash-keyed CRUD over the ``tracks`` table."""
+
 from __future__ import annotations
 
 import logging
@@ -63,9 +64,7 @@ def ingest(path: Path | str, *, probe: dict[str, Any] | None = None) -> Track:
 
     cols = ",".join(fields.keys())
     placeholders = ",".join(["?"] * len(fields))
-    update_clause = ",".join(
-        f"{k}=excluded.{k}" for k in fields if k != "content_hash"
-    )
+    update_clause = ",".join(f"{k}=excluded.{k}" for k in fields if k != "content_hash")
     db.execute(
         f"INSERT INTO tracks ({cols}) VALUES ({placeholders}) "
         f"ON CONFLICT(content_hash) DO UPDATE SET {update_clause}, last_seen=datetime('now')",

@@ -14,6 +14,7 @@ Hardening:
 - ``PluginError`` carries the tail of the plugin's stderr log so a "exited
   before responding" message includes whatever uv/Python actually said.
 """
+
 from __future__ import annotations
 
 import collections
@@ -61,9 +62,7 @@ class Plugin:
         # kwarg lets tests / future call sites override; otherwise we use what
         # the plugin author declared.
         self.default_timeout = (
-            default_timeout
-            if default_timeout is not None
-            else loaded.manifest.default_timeout_sec
+            default_timeout if default_timeout is not None else loaded.manifest.default_timeout_sec
         )
         self._proc: subprocess.Popen[str] | None = None
         self._log_fp: IO[str] | None = None
@@ -99,11 +98,16 @@ class Plugin:
         log_fp, log_path = self._open_log()
         try:
             cmd = [
-                "uv", "run",
-                "--project", str(project_dir),
-                "--python", m.python,
-                "python", "-u",
-                "-m", m.entrypoint_module,
+                "uv",
+                "run",
+                "--project",
+                str(project_dir),
+                "--python",
+                m.python,
+                "python",
+                "-u",
+                "-m",
+                m.entrypoint_module,
             ]
             log.info("starting plugin %s@%s", self.name, self._loaded.version)
             proc = subprocess.Popen(
@@ -250,7 +254,11 @@ class Plugin:
                 )
 
             if "error" in resp:
-                err = resp["error"] if isinstance(resp["error"], dict) else {"message": str(resp["error"])}
+                err = (
+                    resp["error"]
+                    if isinstance(resp["error"], dict)
+                    else {"message": str(resp["error"])}
+                )
                 raise PluginError(
                     err.get("code", -1),
                     err.get("message", "unknown error"),

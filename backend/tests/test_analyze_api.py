@@ -5,6 +5,7 @@ Real analyzer plugins (allin1) are too heavy to run in the test suite; the echo
 plugin's ``analyze`` exists specifically to give us pipeline coverage without
 the install cost.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterator

@@ -2,6 +2,7 @@
 
 The track hash is sha256 of the raw bytes — stable across renames and moves.
 """
+
 from __future__ import annotations
 
 import hashlib

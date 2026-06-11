@@ -1,4 +1,5 @@
 """``aidj`` CLI — minimal entry points for ops tasks."""
+
 from __future__ import annotations
 
 import argparse

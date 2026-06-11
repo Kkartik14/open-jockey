@@ -18,6 +18,7 @@ Staleness rule (used by the builder to decide "do I need to rebuild?"):
 
 The staleness check is self-contained: callers only pass a track hash.
 """
+
 from __future__ import annotations
 
 import logging
@@ -72,17 +73,14 @@ def upsert(profile: TrackProfile) -> TrackProfile:
 
 
 def delete(track_hash: str) -> bool:
-    cur = db.execute(
-        "DELETE FROM track_profiles WHERE track_hash=?", (track_hash,)
-    )
+    cur = db.execute("DELETE FROM track_profiles WHERE track_hash=?", (track_hash,))
     return cur.rowcount > 0
 
 
 def list_all(*, limit: int = 1000) -> list[TrackProfile]:
     """Most-recently-built first. Used by the Library coverage view."""
     rows = db.fetch_all(
-        "SELECT profile_json FROM track_profiles "
-        "ORDER BY built_at DESC, track_hash LIMIT ?",
+        "SELECT profile_json FROM track_profiles ORDER BY built_at DESC, track_hash LIMIT ?",
         (limit,),
     )
     return [TrackProfile.from_row(r) for r in rows]
@@ -95,8 +93,7 @@ def is_stale(track_hash: str) -> bool:
     without a profile so the builder treats them uniformly.
     """
     row = db.fetch_one(
-        "SELECT profile_version, profile_json, built_at "
-        "FROM track_profiles WHERE track_hash=?",
+        "SELECT profile_version, profile_json, built_at FROM track_profiles WHERE track_hash=?",
         (track_hash,),
     )
     if row is None:
@@ -124,8 +121,7 @@ def _has_missing_source_run(run_ids: list[int]) -> bool:
     unique_ids = sorted(set(run_ids))
     placeholders = ",".join(["?"] * len(unique_ids))
     newest = db.fetch_one(
-        f"SELECT COUNT(*) AS n FROM analysis_runs "
-        f"WHERE id IN ({placeholders})",
+        f"SELECT COUNT(*) AS n FROM analysis_runs WHERE id IN ({placeholders})",
         tuple(unique_ids),
     )
     return newest is None or int(newest["n"]) != len(unique_ids)
@@ -139,9 +135,7 @@ def coverage_counts() -> dict[str, int]:
     ``total_tracks - sum(readiness_counts)`` so a deleted profile shows up as
     missing immediately.
     """
-    rows = db.fetch_all(
-        "SELECT readiness, COUNT(*) AS n FROM track_profiles GROUP BY readiness"
-    )
+    rows = db.fetch_all("SELECT readiness, COUNT(*) AS n FROM track_profiles GROUP BY readiness")
     counts: dict[str, int] = {"ready": 0, "partial": 0, "blocked": 0}
     for r in rows:
         counts[r["readiness"]] = int(r["n"])

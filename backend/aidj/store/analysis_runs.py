@@ -20,6 +20,7 @@ The lifecycle is:
    write is dropped and the current row is returned. This prevents an
    in-flight analyzer that finishes late from clobbering a newer claim's row.
 """
+
 from __future__ import annotations
 
 import json
@@ -262,7 +263,10 @@ def _terminal_write(
         log.warning(
             "analysis result discarded — claim token mismatch (track=%s analyzer=%s "
             "version=%s status=%s); a newer claim has taken over the slot",
-            track_hash[:12], analyzer_name, analyzer_version, status.value,
+            track_hash[:12],
+            analyzer_name,
+            analyzer_version,
+            status.value,
         )
 
     current = get(track_hash, analyzer_name, version=analyzer_version)

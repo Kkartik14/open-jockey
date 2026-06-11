@@ -20,6 +20,7 @@ label-driven selection that reads the bake-off rollups. The builder tolerates
 missing and malformed data: one bad analyzer output is skipped, never fatal,
 so a partially-analyzed track still yields a usable (partial) profile.
 """
+
 from __future__ import annotations
 
 import logging
@@ -380,7 +381,5 @@ def _readiness(fields: CompletenessFields) -> Readiness:
 
 
 def _completeness_score(fields: CompletenessFields) -> float:
-    score = sum(
-        weight for name, weight in _COMPLETENESS_WEIGHTS.items() if getattr(fields, name)
-    )
+    score = sum(weight for name, weight in _COMPLETENESS_WEIGHTS.items() if getattr(fields, name))
     return round(score, 6)  # tame float drift; keeps the value within [0, 1]

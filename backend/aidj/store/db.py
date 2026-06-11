@@ -3,6 +3,7 @@
 Single-user, single-process app — sync sqlite3 is fine. We rely on
 ``check_same_thread=False`` plus FastAPI's threadpool handling for sync handlers.
 """
+
 from __future__ import annotations
 
 import logging
@@ -228,8 +229,7 @@ def _migrate_in_place(conn: sqlite3.Connection) -> None:
 
 def _candidates_need_track_cascade(conn: sqlite3.Connection) -> bool:
     tables = {
-        row["name"]
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
     if "candidates" not in tables:
         return False

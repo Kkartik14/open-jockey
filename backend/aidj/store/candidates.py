@@ -3,6 +3,7 @@
 The candidate graph builder produces typed ``TransitionCandidate`` objects; this
 module persists them under a project and reads them back for API/frontend use.
 """
+
 from __future__ import annotations
 
 import json

@@ -3,6 +3,7 @@
 Lazy: ``Plugin`` objects are constructed on first ``get()``. Each plugin's
 subprocess is started lazily on its first ``call()``.
 """
+
 from __future__ import annotations
 
 import logging

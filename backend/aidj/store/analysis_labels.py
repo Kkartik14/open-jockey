@@ -4,6 +4,7 @@ Each row is one user-applied tag against an analysis run. Multiple rows of the
 same ``kind`` against the same run are allowed by design — a row counts as one
 verification event, and the per-kind count is what matters in the rollup.
 """
+
 from __future__ import annotations
 
 import logging
@@ -133,5 +134,7 @@ def rollup_by_analyzer_and_genre() -> dict[str, dict[str, dict[AnalysisLabelKind
     for row in rows:
         analyzer = row["analyzer_name"]
         genre = row["genre"] or UNTAGGED_GENRE
-        out.setdefault(analyzer, {}).setdefault(genre, {})[AnalysisLabelKind(row["kind"])] = int(row["n"])
+        out.setdefault(analyzer, {}).setdefault(genre, {})[AnalysisLabelKind(row["kind"])] = int(
+            row["n"]
+        )
     return out

@@ -4,6 +4,7 @@ Single-user local app — no Redis/Celery. Workers poll for queued jobs by kind,
 claim one atomically, run it, and update status. Retries are counted per-job;
 failures past ``max_retries`` are terminal.
 """
+
 from __future__ import annotations
 
 import json
@@ -59,7 +60,13 @@ def fail(job_id: int, error: str, *, retry: bool = True) -> None:
             f"WHERE id=?",
             (error, job_id),
         )
-        log.info("job %d requeued (retries=%d/%d): %s", job_id, row["retries"] + 1, row["max_retries"], error)
+        log.info(
+            "job %d requeued (retries=%d/%d): %s",
+            job_id,
+            row["retries"] + 1,
+            row["max_retries"],
+            error,
+        )
     else:
         db.execute(
             f"UPDATE jobs SET status='{JobStatus.FAILED}', finished_at=datetime('now'), error=? WHERE id=?",

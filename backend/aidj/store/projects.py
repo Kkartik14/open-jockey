@@ -4,6 +4,7 @@ Projects own Phase 3 transition candidates and later planner/render artifacts.
 The table already existed as a schema stub; this module turns it into a real
 store boundary without changing the schema.
 """
+
 from __future__ import annotations
 
 import json
