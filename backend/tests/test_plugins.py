@@ -4,6 +4,7 @@ These tests spawn a real subprocess via uv, so they're slower than the rest of
 the suite. The first run installs the plugin's tiny venv; subsequent runs reuse
 it via the session-scoped ``shared_uv_cache``.
 """
+
 from __future__ import annotations
 
 import pytest

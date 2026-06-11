@@ -4,6 +4,7 @@ The ``settings()`` accessor reads a module-level singleton rather than using
 ``lru_cache`` so tests (and future runtime contexts) can swap it out cleanly via
 ``set_settings``.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -64,7 +65,9 @@ class Settings(BaseSettings):
 
     @property
     def uv_cache_root(self) -> Path:
-        return self.uv_cache_dir if self.uv_cache_dir is not None else (self.store_root / "uv-cache")
+        return (
+            self.uv_cache_dir if self.uv_cache_dir is not None else (self.store_root / "uv-cache")
+        )
 
     def ensure_dirs(self) -> None:
         dirs = (

@@ -1,4 +1,5 @@
 """analysis_labels repository + API route coverage."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator

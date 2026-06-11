@@ -8,6 +8,7 @@ works without parsing.
 
 Keep this module dependency-free; it gets imported by everything in the store.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime

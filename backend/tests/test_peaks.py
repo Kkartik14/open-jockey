@@ -1,4 +1,5 @@
 """Peak-extraction unit tests + cache behaviour."""
+
 from __future__ import annotations
 
 import shutil
@@ -87,15 +88,11 @@ def test_extract_peaks_never_exceeds_requested_samples(tmp_path: Path) -> None:
     _make_test_wav(p, duration_sec=1.0, sample_rate=8000)  # exactly 8000 PCM samples
     for target in [64, 256, 1024, 2048, 5000]:
         data = audio_peaks.extract_peaks(p, samples=target)
-        assert data.samples <= target, (
-            f"asked for {target} buckets, got {data.samples}"
-        )
+        assert data.samples <= target, f"asked for {target} buckets, got {data.samples}"
 
 
 @needs_ffmpeg
-def test_get_or_compute_peaks_ignores_stale_unversioned_cache(
-    tmp_aidj, tmp_path: Path
-) -> None:
+def test_get_or_compute_peaks_ignores_stale_unversioned_cache(tmp_aidj, tmp_path: Path) -> None:
     """An old cache file (without the new version prefix) must NOT be read.
 
     Before the format-version fix, writers put cached peaks at
@@ -128,7 +125,8 @@ def test_get_or_compute_peaks_ignores_stale_unversioned_cache(
     assert result.samples > 1
     # And the new versioned cache file should now exist alongside the orphan.
     new_path = cache.path_for(
-        audio_peaks.PEAKS_KIND, track_hash,
+        audio_peaks.PEAKS_KIND,
+        track_hash,
         f"peaks-v{audio_peaks.PEAKS_FORMAT_VERSION}-2048.json",
         create_parent=False,
     )

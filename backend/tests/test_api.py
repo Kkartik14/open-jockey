@@ -1,4 +1,5 @@
 """FastAPI surface — exercised through TestClient without a real network."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -147,9 +148,7 @@ def test_audio_stream_404_when_hash_unknown(client: TestClient) -> None:
     assert r.status_code == 404
 
 
-def test_audio_stream_410_when_source_file_missing(
-    client: TestClient, tmp_path: Path
-) -> None:
+def test_audio_stream_410_when_source_file_missing(client: TestClient, tmp_path: Path) -> None:
     """Track was ingested but the source file is gone now → 410 Gone, not 500."""
     p = tmp_path / "song.wav"
     p.write_bytes(b"RIFF\x00\x00\x00\x00WAVEfmt-fake")
@@ -160,9 +159,7 @@ def test_audio_stream_410_when_source_file_missing(
     assert "no longer present" in r.json()["detail"]
 
 
-def test_audio_stream_uses_inline_content_disposition(
-    client: TestClient, tmp_path: Path
-) -> None:
+def test_audio_stream_uses_inline_content_disposition(client: TestClient, tmp_path: Path) -> None:
     """Browsers should play the file, not download it."""
     p = tmp_path / "song.mp3"
     p.write_bytes(b"ID3\x04\x00fake-but-routable")
@@ -260,9 +257,7 @@ def test_peaks_410_when_source_missing(client: TestClient, tmp_path: Path) -> No
     assert r.status_code == 410
 
 
-def test_peaks_503_when_ffmpeg_unavailable(
-    client: TestClient, sample_file: Path
-) -> None:
+def test_peaks_503_when_ffmpeg_unavailable(client: TestClient, sample_file: Path) -> None:
     from aidj.audio import peaks as audio_peaks
 
     track = tracks.ingest(sample_file)
@@ -281,8 +276,7 @@ def _beatgrid_output(*, bpm: float = 124.0, n_beats: int = 8) -> dict:
     return {
         "tempo": {"bpm": bpm},
         "beats": [
-            {"time_sec": round(i * 0.5, 3), "is_downbeat": (i % 4 == 0)}
-            for i in range(n_beats)
+            {"time_sec": round(i * 0.5, 3), "is_downbeat": (i % 4 == 0)} for i in range(n_beats)
         ],
         "sections": [{"start_sec": 0.0, "end_sec": 4.0, "label": "intro"}],
         "duration_sec": round(n_beats * 0.5, 3),
@@ -329,9 +323,7 @@ def test_post_profile_build_404_for_unknown_track(client: TestClient) -> None:
     assert "not found" in r.json()["detail"]
 
 
-def test_post_profile_build_blocks_when_no_runs(
-    client: TestClient, sample_file: Path
-) -> None:
+def test_post_profile_build_blocks_when_no_runs(client: TestClient, sample_file: Path) -> None:
     """An ingested-but-unanalyzed track yields a persisted blocked profile —
     coverage can distinguish 'tried, unusable' from 'never built'."""
     track = tracks.ingest(sample_file)
@@ -378,9 +370,7 @@ def test_post_profile_build_force_reselects_when_staleness_would_not(
     assert second["tempo"]["bpm"] == 128.0
 
 
-def test_profile_coverage_buckets_are_exhaustive(
-    client: TestClient, tmp_path: Path
-) -> None:
+def test_profile_coverage_buckets_are_exhaustive(client: TestClient, tmp_path: Path) -> None:
     # Three ingested tracks; one blocked, one partial, one with no profile.
     a = tmp_path / "a.bin"
     b = tmp_path / "b.bin"

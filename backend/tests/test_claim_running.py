@@ -1,4 +1,5 @@
 """Atomic ``analysis_runs.claim_running`` — decision matrix + concurrency."""
+
 from __future__ import annotations
 
 import threading
@@ -182,7 +183,9 @@ def test_complete_run_with_matching_token_writes(tmp_aidj, sample_file: Path) ->
     assert final.started_at == claim.run.started_at
 
 
-def test_complete_run_with_mismatched_token_drops_result(tmp_aidj, sample_file: Path, caplog) -> None:
+def test_complete_run_with_mismatched_token_drops_result(
+    tmp_aidj, sample_file: Path, caplog
+) -> None:
     """If a newer claim took the slot, an old terminal write must not overwrite it."""
     import logging
 

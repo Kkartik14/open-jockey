@@ -6,6 +6,7 @@ otherwise escape that root (``../../etc/passwd``). These tests assert the
 validator rejects every escape path we can think of, and that the happy path
 still produces a writable file under ``cache_root``.
 """
+
 from __future__ import annotations
 
 import pytest

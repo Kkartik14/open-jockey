@@ -10,6 +10,7 @@ Conversions from sqlite3.Row are defined as ``from_row`` classmethods so the
 repository functions (``store.tracks``, ``store.jobs``, ``store.analysis_runs``)
 stay tiny.
 """
+
 from __future__ import annotations
 
 import json
@@ -46,6 +47,7 @@ class AnalysisLabelKind(StrEnum):
     correct/✗, but the *kind* of mistake an analyzer made so we can roll up
     per-genre and per-analyzer stats when picking a default.
     """
+
     CORRECT = "correct"
     HALF_TIME = "half_time"
     DOUBLE_TIME = "double_time"
@@ -63,6 +65,7 @@ class SectionLabel(StrEnum):
     bridge/inst/outro; MSAF: numeric clusters). Plugins are responsible for
     mapping their native labels onto this enum.
     """
+
     INTRO = "intro"
     VERSE = "verse"
     CHORUS = "chorus"
@@ -209,6 +212,7 @@ class AnalysisLabel(_ModelBase):
 
 class Beat(_ModelBase):
     """One detected beat. ``time_sec`` is the onset; downbeats are flagged."""
+
     time_sec: float
     is_downbeat: bool = False
     confidence: float | None = None
@@ -216,6 +220,7 @@ class Beat(_ModelBase):
 
 class Section(_ModelBase):
     """One structure segment (intro, verse, drop, etc.)."""
+
     start_sec: float
     end_sec: float
     label: SectionLabel
@@ -224,6 +229,7 @@ class Section(_ModelBase):
 
 class TempoEstimate(_ModelBase):
     """Detected tempo with optional confidence and half/double-time hints."""
+
     bpm: float
     confidence: float | None = None
     half_time_likely: bool = False
@@ -236,6 +242,7 @@ class BeatGridAnalysis(_ModelBase):
     A plugin's ``analyze`` method returns JSON conforming to this shape; the API
     stores it in ``analysis_runs.output_json``.
     """
+
     tempo: TempoEstimate
     beats: list[Beat]
     sections: list[Section]
@@ -248,6 +255,7 @@ class BeatGridAnalysis(_ModelBase):
 
 class KeyAnalysis(_ModelBase):
     """Output schema for key-detection analyzers (essentia)."""
+
     key: str = Field(..., description='Tonic, e.g. "C", "F#", "Bb".')
     scale: str = Field(..., description='"major" or "minor".')
     camelot: str | None = Field(
@@ -282,6 +290,7 @@ class Readiness(StrEnum):
     but not stem-aware techniques; downstream layers can degrade gracefully.
     ``blocked``: not usable — the candidate graph should refuse this track.
     """
+
     READY = "ready"
     PARTIAL = "partial"
     BLOCKED = "blocked"
@@ -299,6 +308,7 @@ class FieldProvenance(_ModelBase):
     staleness check can ask "is that analysis_run still the most recent?";
     None for backend-derived blocks that don't go through analysis_runs.
     """
+
     source: str
     analysis_run_id: int | None = None
 
@@ -310,6 +320,7 @@ class CompletenessFields(_ModelBase):
     booleans are kept explicit so downstream code can gate per-field
     (``if profile.fields.has_vocals: ...``) without parsing a float.
     """
+
     has_beat_grid: bool = False
     has_key: bool = False
     has_sections: bool = False
@@ -321,6 +332,7 @@ class TempoBlock(_ModelBase):
     """Tempo + its provenance. Conceptually coupled to ``BeatGridBlock`` —
     the builder must ensure both blocks share the same provenance so a profile
     can't end up with BPM from one analyzer and beats from another."""
+
     bpm: float = Field(gt=0.0)
     confidence: float | None = None
     provenance: FieldProvenance
@@ -332,6 +344,7 @@ class BeatGridBlock(_ModelBase):
     ``downbeat_count`` is denormalised from ``beats`` for convenience (avoids
     counting client-side); the builder writes it once and the UI reads it.
     """
+
     beats: list[Beat]
     downbeat_count: int = Field(ge=0)
     duration_sec: float = Field(ge=0.0)
@@ -349,6 +362,7 @@ class BeatGridBlock(_ModelBase):
 
 class KeyBlock(_ModelBase):
     """Tonic + scale + Camelot, sourced together from a key-detection analyzer."""
+
     key: str
     scale: str
     camelot: str | None = None
@@ -360,6 +374,7 @@ class SectionsBlock(_ModelBase):
     """Structural segments. Independent provenance from beat_grid because some
     analyzer pairs (e.g. madmom + MSAF) split beats and sections across two
     different upstreams."""
+
     items: list[Section]
     provenance: FieldProvenance
 
@@ -373,6 +388,7 @@ class EnergyBlock(_ModelBase):
     needs to know energy *over time*, not raw waveform peaks (those live in
     the peaks cache).
     """
+
     sample_rate_hz: float = Field(gt=0.0)
     values: list[float]
     integrated_lufs: float | None = None
@@ -397,6 +413,7 @@ class VocalWindow(_ModelBase):
     ``vocal_avoid_layer`` style transitions where the incoming vocal can
     safely play over the outgoing instrumental.
     """
+
     start_sec: float = Field(ge=0.0)
     end_sec: float
     is_vocal: bool
@@ -417,6 +434,7 @@ class VocalsBlock(_ModelBase):
     re-derivation (different VAD threshold, say) can find the source bytes
     without re-running demucs.
     """
+
     windows: list[VocalWindow]
     stem_cache_key: str | None = None
     provenance: FieldProvenance
@@ -430,6 +448,7 @@ class TrackProfile(_ModelBase):
     ``completeness_score`` summarise what's there. Downstream layers should
     read this object, not raw analysis_runs.
     """
+
     profile_version: int
     track_hash: str
     built_at: str
@@ -453,14 +472,11 @@ class TrackProfile(_ModelBase):
             "has_vocals": self.vocals is not None,
         }
         mismatches = [
-            name
-            for name, present in expected.items()
-            if getattr(self.fields, name) != present
+            name for name, present in expected.items() if getattr(self.fields, name) != present
         ]
         if mismatches:
             raise ValueError(
-                "completeness fields do not match profile blocks: "
-                + ", ".join(mismatches)
+                "completeness fields do not match profile blocks: " + ", ".join(mismatches)
             )
         return self
 
@@ -552,9 +568,7 @@ class TransitionCandidate(_ModelBase):
             from_cue_bar=d["from_cue_bar"],
             to_cue_bar=d["to_cue_bar"],
             scores=TransitionScores.model_validate(json.loads(d["scores_json"] or "{}")),
-            allowed_techniques=[
-                TransitionTechnique(t) for t in techniques
-            ],
+            allowed_techniques=[TransitionTechnique(t) for t in techniques],
             created_at=d.get("created_at"),
         )
 

@@ -5,6 +5,7 @@ ordered transition edges. It does not listen to music, choose a set order, or
 render audio. Human listening labels remain the truth source for whether a beat
 grid is actually trustworthy.
 """
+
 from __future__ import annotations
 
 import math
@@ -169,10 +170,7 @@ def _labels_for_profiles(
         if profile.beat_grid and profile.beat_grid.provenance.analysis_run_id is not None:
             run_ids.append(profile.beat_grid.provenance.analysis_run_id)
     labels = analysis_labels.list_for_runs(run_ids)
-    return {
-        run_id: [label.kind for label in items]
-        for run_id, items in labels.items()
-    }
+    return {run_id: [label.kind for label in items] for run_id, items in labels.items()}
 
 
 def _build_pair_candidates(
@@ -373,10 +371,14 @@ def _key_compatible(source: TrackProfile, target: TrackProfile) -> bool | None:
     right_num, right_mode = right
     if left_num == right_num:
         return True
-    return left_mode == right_mode and min(
-        (left_num - right_num) % 12,
-        (right_num - left_num) % 12,
-    ) == 1
+    return (
+        left_mode == right_mode
+        and min(
+            (left_num - right_num) % 12,
+            (right_num - left_num) % 12,
+        )
+        == 1
+    )
 
 
 def _parse_camelot(value: str | None) -> tuple[int, str] | None:

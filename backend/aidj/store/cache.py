@@ -8,6 +8,7 @@ produced an artifact). Each cache entry lives at::
 Splitting the first two hex chars keeps directory fanout reasonable for large
 caches.
 """
+
 from __future__ import annotations
 
 import contextlib

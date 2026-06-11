@@ -1,4 +1,5 @@
 """Tests for the AIDJ_ALLOW_CLOUD_AUDIO opt-in gate on the analyze route."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -32,7 +33,9 @@ def _patched_call(_self, _method, _params=None, *, timeout=None) -> dict[str, An
     }
 
 
-def test_cloud_audio_plugin_blocked_without_env(client: TestClient, sample_file: Path, monkeypatch) -> None:
+def test_cloud_audio_plugin_blocked_without_env(
+    client: TestClient, sample_file: Path, monkeypatch
+) -> None:
     monkeypatch.delenv(CLOUD_AUDIO_OPT_IN_ENV, raising=False)
     track = tracks.ingest(sample_file)
     r = client.post(f"/api/tracks/{track.content_hash}/analyze/allin1_remote", json={})
@@ -41,20 +44,25 @@ def test_cloud_audio_plugin_blocked_without_env(client: TestClient, sample_file:
     assert "AIDJ_ALLOW_CLOUD_AUDIO" in detail
 
 
-def test_cloud_audio_plugin_blocked_with_wrong_env(client: TestClient, sample_file: Path, monkeypatch) -> None:
+def test_cloud_audio_plugin_blocked_with_wrong_env(
+    client: TestClient, sample_file: Path, monkeypatch
+) -> None:
     monkeypatch.setenv(CLOUD_AUDIO_OPT_IN_ENV, "true")  # not "1"
     track = tracks.ingest(sample_file)
     r = client.post(f"/api/tracks/{track.content_hash}/analyze/allin1_remote", json={})
     assert r.status_code == 403
 
 
-def test_cloud_audio_plugin_proceeds_with_env(client: TestClient, sample_file: Path, monkeypatch) -> None:
+def test_cloud_audio_plugin_proceeds_with_env(
+    client: TestClient, sample_file: Path, monkeypatch
+) -> None:
     monkeypatch.setenv(CLOUD_AUDIO_OPT_IN_ENV, "1")
     track = tracks.ingest(sample_file)
 
     # Don't actually invoke the Modal-backed plugin (would need modal-client +
     # a deployed function). Stub Plugin.call to return canned BeatGridAnalysis.
     from aidj.plugins.runtime import Plugin
+
     with patch.object(Plugin, "call", _patched_call):
         r = client.post(f"/api/tracks/{track.content_hash}/analyze/allin1_remote", json={})
 
@@ -64,7 +72,9 @@ def test_cloud_audio_plugin_proceeds_with_env(client: TestClient, sample_file: P
     assert body["analyzer_name"] == "allin1_remote"
 
 
-def test_non_cloud_plugin_unaffected_by_env(client: TestClient, sample_file: Path, monkeypatch) -> None:
+def test_non_cloud_plugin_unaffected_by_env(
+    client: TestClient, sample_file: Path, monkeypatch
+) -> None:
     """Echo (cloud_audio=False) ignores the env var entirely."""
     monkeypatch.delenv(CLOUD_AUDIO_OPT_IN_ENV, raising=False)
     track = tracks.ingest(sample_file)

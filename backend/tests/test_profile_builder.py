@@ -5,6 +5,7 @@ synthetic ``analysis_runs`` fixtures. They prove the funnel is correct — NOT
 that any analyzer is musically right (that's the human listening test in
 ``private/plan.md``). Synthetic green here is plumbing, not validation.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -29,14 +30,9 @@ def _ingested_track(tmp_path: Path, byte: bytes = b"x") -> str:
     return tracks.ingest(p).content_hash
 
 
-def _beatgrid_output(
-    *, bpm: float = 124.0, n_beats: int = 8, with_sections: bool = True
-) -> dict:
+def _beatgrid_output(*, bpm: float = 124.0, n_beats: int = 8, with_sections: bool = True) -> dict:
     """A BeatGridAnalysis-shaped dict like the allin1/librosa plugins emit."""
-    beats = [
-        {"time_sec": round(i * 0.5, 3), "is_downbeat": (i % 4 == 0)}
-        for i in range(n_beats)
-    ]
+    beats = [{"time_sec": round(i * 0.5, 3), "is_downbeat": (i % 4 == 0)} for i in range(n_beats)]
     out: dict = {
         "tempo": {"bpm": bpm},
         "beats": beats,

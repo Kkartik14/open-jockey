@@ -11,6 +11,7 @@
 - all module-level singletons (settings, db connection, registry) reset before
   AND after the test, so ordering between tests cannot leak state
 """
+
 from __future__ import annotations
 
 from pathlib import Path

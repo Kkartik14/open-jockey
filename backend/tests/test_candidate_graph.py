@@ -1,4 +1,5 @@
 """Phase 3 Transition Candidate Graph."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -44,7 +45,12 @@ def _analysis_run(track_hash: str, name: str = "librosa"):
         analyzer_name=name,
         analyzer_version="0.1.0",
         status=AnalysisStatus.COMPLETED,
-        output={"tempo": {"bpm": 120.0}, "beats": [{"time_sec": 0.0}], "sections": [], "duration_sec": 1.0},
+        output={
+            "tempo": {"bpm": 120.0},
+            "beats": [{"time_sec": 0.0}],
+            "sections": [],
+            "duration_sec": 1.0,
+        },
         started_at="2026-01-01 00:00:00",
         finished_at="2026-01-01 00:00:01",
     )
@@ -60,8 +66,7 @@ def _profile(
 ) -> TrackProfile:
     prov = FieldProvenance(source="librosa@0.1.0", analysis_run_id=run_id)
     beats = [
-        Beat(time_sec=round(i * (60.0 / bpm), 3), is_downbeat=(i % 4 == 0))
-        for i in range(128)
+        Beat(time_sec=round(i * (60.0 / bpm), 3), is_downbeat=(i % 4 == 0)) for i in range(128)
     ]
     key = (
         KeyBlock(key="C", scale="major", camelot=camelot, confidence=None, provenance=prov)

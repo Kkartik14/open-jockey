@@ -11,6 +11,7 @@ ffmpeg + ffprobe are required at runtime. They are *system* deps (``brew
 install ffmpeg`` / ``apt install ffmpeg``); we don't bundle them. If they are
 missing, the peaks endpoint surfaces a 503 with a clear message.
 """
+
 from __future__ import annotations
 
 import json
@@ -68,7 +69,9 @@ def extract_peaks(
     by ffmpeg before we see it (``-ac 1``).
     """
     if not is_ffmpeg_available():
-        raise PeaksError("ffmpeg/ffprobe not on PATH; install with `brew install ffmpeg` (macOS) or your package manager")
+        raise PeaksError(
+            "ffmpeg/ffprobe not on PATH; install with `brew install ffmpeg` (macOS) or your package manager"
+        )
 
     duration = _probe_duration(path)
     pcm = _decode_pcm(path, sample_rate_hz=sample_rate_hz)
@@ -102,9 +105,13 @@ def _probe_duration(path: Path) -> float:
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
                 str(path),
             ],
             capture_output=True,
@@ -129,11 +136,18 @@ def _decode_pcm(path: Path, *, sample_rate_hz: int) -> np.ndarray:
     try:
         result = subprocess.run(
             [
-                "ffmpeg", "-v", "error",
-                "-i", str(path),
-                "-ac", "1",                  # mono
-                "-ar", str(sample_rate_hz),  # downsample
-                "-f", "s16le", "-",          # raw 16-bit signed little-endian
+                "ffmpeg",
+                "-v",
+                "error",
+                "-i",
+                str(path),
+                "-ac",
+                "1",  # mono
+                "-ar",
+                str(sample_rate_hz),  # downsample
+                "-f",
+                "s16le",
+                "-",  # raw 16-bit signed little-endian
             ],
             capture_output=True,
             check=True,
