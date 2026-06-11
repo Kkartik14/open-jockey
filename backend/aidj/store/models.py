@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from enum import StrEnum
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -520,6 +520,7 @@ class TransitionScores(_ModelBase):
 
     score: float = Field(ge=0.0, le=1.0)
     tempo_delta_pct: float = Field(ge=0.0)
+    tempo_match_ratio: float | None = Field(default=None, gt=0.0)
     from_bpm: float = Field(gt=0.0)
     to_bpm: float = Field(gt=0.0)
     from_cue_sec: float = Field(ge=0.0)
@@ -582,3 +583,161 @@ class CandidateGraphBuildResult(_ModelBase):
     skipped_tracks: dict[str, str] = Field(default_factory=dict)
     candidates: list[TransitionCandidate]
     warnings: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Transition Renders
+# ---------------------------------------------------------------------------
+
+
+class RenderStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class RenderTechnique(StrEnum):
+    PHRASE_SWAP = "phrase_swap"
+    FILTER_BLEND = "filter_blend"
+    LONG_CROSSFADE = "long_crossfade"
+    ECHO_OUT = "echo_out"
+
+
+class RenderLabelKind(StrEnum):
+    GOOD = "good"
+    OFF_BEAT = "off_beat"
+    BAD_CUE = "bad_cue"
+    BAD_ENERGY = "bad_energy"
+    BAD_KEY = "bad_key"
+    CLIPPING = "clipping"
+    WRONG_TEMPO_MATCH = "wrong_tempo_match"
+    TOO_ABRUPT = "too_abrupt"
+    TOO_LONG = "too_long"
+    BORING = "boring"
+    UNUSABLE = "unusable"
+
+
+class SourceAnchorPolicy(StrEnum):
+    KEEP_OUTGOING_TEMPO = "keep_outgoing_tempo"
+    KEEP_INCOMING_TEMPO = "keep_incoming_tempo"
+    MEET_IN_MIDDLE = "meet_in_middle"
+
+
+class RenderConfidenceSnapshot(_ModelBase):
+    from_tempo_confidence: float | None = None
+    to_tempo_confidence: float | None = None
+    from_key_confidence: float | None = None
+    to_key_confidence: float | None = None
+    from_beat_source: str
+    to_beat_source: str
+    from_key_source: str | None = None
+    to_key_source: str | None = None
+    from_beat_labels: list[AnalysisLabelKind] = Field(default_factory=list)
+    to_beat_labels: list[AnalysisLabelKind] = Field(default_factory=list)
+
+
+class RenderLoudnessSummary(_ModelBase):
+    integrated_lufs: float | None = None
+    loudness_range: float | None = None
+    true_peak_dbfs: float | None = None
+    clipping_detected: bool = False
+
+
+class RenderRequestConfig(_ModelBase):
+    source_anchor_policy: SourceAnchorPolicy = SourceAnchorPolicy.KEEP_OUTGOING_TEMPO
+    from_cue_sec: float = Field(ge=0.0)
+    to_cue_sec: float = Field(ge=0.0)
+    from_bpm: float = Field(gt=0.0)
+    to_bpm: float = Field(gt=0.0)
+    tempo_match_ratio: float = Field(gt=0.0)
+    tempo_match_ratio_source: Literal["candidate", "renderer_recomputed"]
+    transition_length_sec: float = Field(gt=0.0)
+    source_lead_in_sec: float = Field(ge=0.0)
+    target_tail_sec: float = Field(ge=0.0)
+    loudness_target_lufs: float
+    output_sample_rate: int = Field(gt=0)
+    output_channels: int = Field(gt=0)
+    confidence_snapshot: RenderConfidenceSnapshot
+
+
+class RenderActuals(_ModelBase):
+    source_lufs: float | None = None
+    target_lufs: float | None = None
+    ffmpeg_version: str
+    source_loudness: RenderLoudnessSummary | None = None
+    target_loudness: RenderLoudnessSummary | None = None
+    output_loudness: RenderLoudnessSummary | None = None
+    source_loudness_origin: Literal["fresh", "cache", "unavailable"] = "unavailable"
+    target_loudness_origin: Literal["fresh", "cache", "unavailable"] = "unavailable"
+
+
+class RenderArtifact(_ModelBase):
+    id: int
+    project_id: int
+    candidate_id: int
+    from_track: str
+    to_track: str
+    technique: RenderTechnique
+    status: RenderStatus
+    artifact_key: str | None = None
+    duration_sec: float | None = Field(default=None, ge=0.0)
+    sample_rate: int | None = Field(default=None, gt=0)
+    channels: int | None = Field(default=None, gt=0)
+    claim_token: str | None = None
+    request_config: RenderRequestConfig
+    actuals: RenderActuals | None = None
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+    created_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> Self:
+        d = dict(row)
+        return cls(
+            id=d["id"],
+            project_id=d["project_id"],
+            candidate_id=d["candidate_id"],
+            from_track=d["from_track"],
+            to_track=d["to_track"],
+            technique=RenderTechnique(d["technique"]),
+            status=RenderStatus(d["status"]),
+            artifact_key=d.get("artifact_key"),
+            duration_sec=d.get("duration_sec"),
+            sample_rate=d.get("sample_rate"),
+            channels=d.get("channels"),
+            claim_token=d.get("claim_token"),
+            request_config=RenderRequestConfig.model_validate(
+                json.loads(d["request_config_json"])
+            ),
+            actuals=RenderActuals.model_validate(json.loads(d["actuals_json"]))
+            if d.get("actuals_json")
+            else None,
+            warnings=json.loads(d["warnings_json"] or "[]"),
+            error=d.get("error"),
+            created_at=d["created_at"],
+            started_at=d.get("started_at"),
+            finished_at=d.get("finished_at"),
+        )
+
+
+class RenderLabel(_ModelBase):
+    id: int
+    render_id: int
+    kind: RenderLabelKind
+    notes: str | None = None
+    created_at: str | None = None
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> Self:
+        d = dict(row)
+        return cls(
+            id=d["id"],
+            render_id=d["render_id"],
+            kind=RenderLabelKind(d["kind"]),
+            notes=d.get("notes"),
+            created_at=d.get("created_at"),
+        )
