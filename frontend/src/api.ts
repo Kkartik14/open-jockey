@@ -232,6 +232,7 @@ export type TransitionTechnique =
 export type TransitionScores = {
   score: number;
   tempo_delta_pct: number;
+  tempo_match_ratio: number | null;
   from_bpm: number;
   to_bpm: number;
   from_cue_sec: number;
@@ -263,6 +264,113 @@ export type CandidateGraphBuildResult = {
   skipped_tracks: Record<string, string>;
   candidates: TransitionCandidate[];
   warnings: string[];
+};
+
+// ---------------------------------------------------------------------------
+// Transition renders
+// ---------------------------------------------------------------------------
+
+export type RenderStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type RenderTechnique = TransitionTechnique;
+
+export type RenderLabelKind =
+  | "good"
+  | "off_beat"
+  | "bad_cue"
+  | "bad_energy"
+  | "bad_key"
+  | "clipping"
+  | "wrong_tempo_match"
+  | "too_abrupt"
+  | "too_long"
+  | "boring"
+  | "unusable";
+
+export type RenderConfidenceSnapshot = {
+  from_tempo_confidence: number | null;
+  to_tempo_confidence: number | null;
+  from_key_confidence: number | null;
+  to_key_confidence: number | null;
+  from_beat_source: string;
+  to_beat_source: string;
+  from_key_source: string | null;
+  to_key_source: string | null;
+  from_beat_labels: AnalysisLabelKind[];
+  to_beat_labels: AnalysisLabelKind[];
+};
+
+export type RenderLoudnessSummary = {
+  integrated_lufs: number | null;
+  loudness_range: number | null;
+  true_peak_dbfs: number | null;
+  clipping_detected: boolean;
+};
+
+export type RenderRequestConfig = {
+  source_anchor_policy:
+    | "keep_outgoing_tempo"
+    | "keep_incoming_tempo"
+    | "meet_in_middle";
+  from_cue_sec: number;
+  to_cue_sec: number;
+  from_bpm: number;
+  to_bpm: number;
+  tempo_match_ratio: number;
+  tempo_match_ratio_source: "candidate" | "renderer_recomputed";
+  transition_length_sec: number;
+  source_lead_in_sec: number;
+  target_tail_sec: number;
+  loudness_target_lufs: number;
+  output_sample_rate: number;
+  output_channels: number;
+  confidence_snapshot: RenderConfidenceSnapshot;
+};
+
+export type RenderActuals = {
+  source_lufs: number | null;
+  target_lufs: number | null;
+  ffmpeg_version: string;
+  source_loudness: RenderLoudnessSummary | null;
+  target_loudness: RenderLoudnessSummary | null;
+  output_loudness: RenderLoudnessSummary | null;
+  source_loudness_origin: "fresh" | "cache" | "unavailable";
+  target_loudness_origin: "fresh" | "cache" | "unavailable";
+};
+
+export type RenderArtifact = {
+  id: number;
+  project_id: number;
+  candidate_id: number;
+  from_track: string;
+  to_track: string;
+  technique: RenderTechnique;
+  status: RenderStatus;
+  artifact_key: string | null;
+  duration_sec: number | null;
+  sample_rate: number | null;
+  channels: number | null;
+  claim_token: string | null;
+  request_config: RenderRequestConfig;
+  actuals: RenderActuals | null;
+  warnings: string[];
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type RenderLabel = {
+  id: number;
+  render_id: number;
+  kind: RenderLabelKind;
+  notes: string | null;
+  created_at: string | null;
 };
 
 /**
@@ -469,4 +577,66 @@ export const api = {
     ),
   listCandidates: (projectId: number, opts?: RequestOptions) =>
     req<TransitionCandidate[]>(`/projects/${projectId}/candidates`, undefined, opts),
+
+  // -------------------------------------------------------------------------
+  // Transition renders
+  // -------------------------------------------------------------------------
+
+  renderCandidate: (
+    projectId: number,
+    candidateId: number,
+    body: { technique?: RenderTechnique | null; force?: boolean } = {},
+    opts?: RequestOptions,
+  ) =>
+    req<RenderArtifact>(
+      `/projects/${projectId}/candidates/${candidateId}/render`,
+      { method: "POST", body: JSON.stringify(body) },
+      opts,
+    ),
+  listRenders: (projectId: number, opts?: RequestOptions) =>
+    req<RenderArtifact[]>(`/projects/${projectId}/renders`, undefined, opts),
+  getRender: (renderId: number, opts?: RequestOptions) =>
+    req<RenderArtifact>(`/renders/${renderId}`, undefined, opts),
+  renderAudioUrl: (renderId: number) => `/api/renders/${renderId}/audio`,
+  cancelRender: (renderId: number, opts?: RequestOptions) =>
+    req<RenderArtifact>(
+      `/renders/${renderId}/cancel`,
+      { method: "POST" },
+      opts,
+    ),
+  deleteRender: (renderId: number, opts?: RequestOptions) => {
+    const { signal, cleanup } = mergeSignals(opts);
+    return fetch(`/api/renders/${renderId}`, {
+      method: "DELETE",
+      signal,
+    })
+      .then((r) => {
+        if (r.status !== 204) throw new Error(`${r.status} ${r.statusText}`);
+      })
+      .finally(cleanup);
+  },
+  listRenderLabels: (renderId: number, opts?: RequestOptions) =>
+    req<RenderLabel[]>(`/renders/${renderId}/labels`, undefined, opts),
+  addRenderLabel: (
+    renderId: number,
+    kind: RenderLabelKind,
+    notes?: string,
+    opts?: RequestOptions,
+  ) =>
+    req<RenderLabel>(
+      `/renders/${renderId}/labels`,
+      { method: "POST", body: JSON.stringify({ kind, notes }) },
+      opts,
+    ),
+  deleteRenderLabel: (renderId: number, labelId: number, opts?: RequestOptions) => {
+    const { signal, cleanup } = mergeSignals(opts);
+    return fetch(`/api/renders/${renderId}/labels/${labelId}`, {
+      method: "DELETE",
+      signal,
+    })
+      .then((r) => {
+        if (r.status !== 204) throw new Error(`${r.status} ${r.statusText}`);
+      })
+      .finally(cleanup);
+  },
 };

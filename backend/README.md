@@ -8,7 +8,7 @@ Python backend that owns the **Project Store**, the **plugin runtime**, and the 
 - **FastAPI** + **uvicorn**
 - **Pydantic v2** for every data shape (domain models, requests, responses)
 - **SQLite** (stdlib `sqlite3`, WAL mode) for metadata
-- **stdlib `subprocess`** for plugin isolation (one uv venv per plugin)
+- **stdlib `subprocess`** for plugin isolation (one uv venv per plugin) and local ffmpeg rendering
 
 No ORM, no `aiosqlite`, no async DB — single-user app, sync is fine.
 
@@ -28,12 +28,17 @@ backend/
 │   │   └── main.py             # FastAPI app + every route
 │   ├── store/                  # the Project Store
 │   │   ├── __init__.py
-│   │   ├── models.py           # Track, Job, AnalysisRun, JobStatus, AnalysisStatus
+│   │   ├── models.py           # Track, profiles, candidates, renders, labels
 │   │   ├── db.py               # connection, schema bootstrap, fetch_one/fetch_all
 │   │   ├── hashing.py          # streaming sha256 + derivation_key()
 │   │   ├── cache.py            # content-addressed cache primitives
 │   │   ├── tracks.py           # Track repository (ingest/get/list_all/delete)
-│   │   └── jobs.py             # Job queue (enqueue/claim_next/complete/fail)
+│   │   ├── jobs.py             # Job queue (enqueue/claim_next/complete/fail)
+│   │   ├── render_artifacts.py # RenderArtifact lifecycle
+│   │   └── render_labels.py    # Render listening labels + rollups
+│   ├── candidate_graph.py      # deterministic transition candidate graph
+│   ├── profile_builder.py      # canonical TrackProfile builder
+│   ├── transition_renderer.py  # ffmpeg transition renderer
 │   └── plugins/                # plugin runtime (host side)
 │       ├── __init__.py
 │       ├── manifest.py         # Manifest (frozen Pydantic) + LoadedManifest
@@ -65,7 +70,7 @@ uv run aidj info               # print project root, store paths, registered plu
 ## Tests
 
 ```bash
-uv run pytest                  # full suite (~1.2s)
+uv run pytest                  # full suite
 uv run pytest tests/test_store.py -v
 uv run pytest -k "echo"        # only tests with "echo" in the name
 ```
@@ -105,6 +110,15 @@ Open <http://127.0.0.1:8000/docs> while the server runs for the live OpenAPI spe
 | GET | `/api/projects` | `list[Project]` |
 | POST | `/api/projects/{id}/candidates/build` | `CandidateGraphBuildResult` |
 | GET | `/api/projects/{id}/candidates` | `list[TransitionCandidate]` |
+| POST | `/api/projects/{id}/candidates/{candidate_id}/render` | `RenderArtifact` |
+| GET | `/api/projects/{id}/renders` | `list[RenderArtifact]` |
+| GET | `/api/renders/{render_id}` | `RenderArtifact` |
+| GET | `/api/renders/{render_id}/audio` | range-served audio |
+| POST | `/api/renders/{render_id}/cancel` | `RenderArtifact` |
+| DELETE | `/api/renders/{render_id}` | 204 |
+| POST | `/api/renders/{render_id}/labels` | `RenderLabel` |
+| GET | `/api/renders/{render_id}/labels` | `list[RenderLabel]` |
+| DELETE | `/api/renders/{render_id}/labels/{label_id}` | 204 |
 | POST | `/api/jobs` | `EnqueueResponse` |
 | GET | `/api/jobs?status=…` | `list[Job]` |
 

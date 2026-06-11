@@ -14,8 +14,15 @@ import {
   type LabelRollup,
   type Plugin,
   type Project,
+  type RenderArtifact,
+  type RenderLabel,
+  type RenderLabelKind,
+  type RenderTechnique,
   type Track,
+  type TransitionCandidate,
 } from "../api";
+import { RenderPanel } from "../components/RenderPanel";
+import { TransitionGraphSection } from "../components/TransitionGraphSection";
 import { Section, StatusPill } from "../components/ui";
 import { fmtBytes } from "../lib/format";
 import { LABEL_KINDS } from "../lib/labels";
@@ -37,6 +44,11 @@ export function LibraryPage() {
     graphResult,
     graphErr,
     graphBuilding,
+    renders,
+    renderLabels,
+    rendersErr,
+    renderActionErr,
+    renderingCandidateIds,
     pluginOutput,
     ingestPath,
   } = state;
@@ -116,19 +128,42 @@ export function LibraryPage() {
       console.error("getLabelRollup failed", rollupResult.reason);
     }
 
+    let latestProject: Project | null = null;
     if (projectsResult.status === "fulfilled") {
       patch.projects = projectsResult.value;
+      latestProject = projectsResult.value[0] ?? null;
     } else {
       console.error("listProjects failed", projectsResult.reason);
+      latestProject = projects[0] ?? null;
+    }
+
+    if (latestProject) {
+      try {
+        const renderRows = await api.listRenders(latestProject.id, opts);
+        const labels = await labelsForRenders(renderRows, opts);
+        patch.renders = renderRows;
+        patch.renderLabels = labels;
+        patch.rendersErr = null;
+      } catch (e) {
+        patch.rendersErr = errorMessage(e);
+        console.error("listRenders failed", e);
+      }
+    } else {
+      patch.renders = [];
+      patch.renderLabels = {};
+      patch.rendersErr = null;
     }
     dispatchLibrary(patch);
   }
 
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+
   useEffect(() => {
     mountedRef.current = true;
     const controller = new AbortController();
-    refresh(controller.signal);
-    const t = setInterval(() => refresh(controller.signal), 5000);
+    refreshRef.current(controller.signal);
+    const t = setInterval(() => refreshRef.current(controller.signal), 5000);
     return () => {
       mountedRef.current = false;
       controller.abort();
@@ -171,8 +206,11 @@ export function LibraryPage() {
         force: true,
         max_candidates_per_pair: 3,
       });
+      const renderRows = await api.listRenders(project.id);
       dispatchLibrary({
         graphResult: result,
+        renders: renderRows,
+        renderLabels: await labelsForRenders(renderRows),
         projects: projects.some((p) => p.id === project.id)
           ? projects
           : [project, ...projects],
@@ -181,6 +219,107 @@ export function LibraryPage() {
       dispatchLibrary({ graphErr: errorMessage(e) });
     } finally {
       dispatchLibrary({ graphBuilding: false });
+    }
+  }
+
+  const latestProject = graphResult?.project ?? projects[0] ?? null;
+
+  async function refreshRenders() {
+    if (!latestProject) return;
+    try {
+      const renderRows = await api.listRenders(latestProject.id);
+      dispatchLibrary({
+        renders: renderRows,
+        renderLabels: await labelsForRenders(renderRows),
+        rendersErr: null,
+      });
+    } catch (e) {
+      dispatchLibrary({ rendersErr: errorMessage(e) });
+    }
+  }
+
+  async function renderGraphCandidate(
+    candidate: TransitionCandidate,
+    technique: RenderTechnique,
+  ) {
+    if (!latestProject || candidate.id === null) return;
+    dispatchLibrary({
+      renderActionErr: null,
+      renderingCandidateIds: new Set([...renderingCandidateIds, candidate.id]),
+    });
+    try {
+      const artifact = await api.renderCandidate(latestProject.id, candidate.id, {
+        technique,
+        force: false,
+      });
+      const labels = await api.listRenderLabels(artifact.id);
+      dispatchLibrary({
+        renders: upsertRender(renders, artifact),
+        renderLabels: { ...renderLabels, [artifact.id]: labels },
+      });
+    } catch (e) {
+      dispatchLibrary({ renderActionErr: errorMessage(e) });
+    } finally {
+      const next = new Set(renderingCandidateIds);
+      next.delete(candidate.id);
+      dispatchLibrary({ renderingCandidateIds: next });
+    }
+  }
+
+  async function cancelRenderArtifact(render: RenderArtifact) {
+    try {
+      const cancelled = await api.cancelRender(render.id);
+      dispatchLibrary({
+        renders: upsertRender(renders, cancelled),
+        renderActionErr: null,
+      });
+    } catch (e) {
+      dispatchLibrary({ renderActionErr: errorMessage(e) });
+    }
+  }
+
+  async function deleteRenderArtifact(render: RenderArtifact) {
+    try {
+      await api.deleteRender(render.id);
+      const nextLabels = { ...renderLabels };
+      delete nextLabels[render.id];
+      dispatchLibrary({
+        renders: renders.filter((item) => item.id !== render.id),
+        renderLabels: nextLabels,
+        renderActionErr: null,
+      });
+    } catch (e) {
+      dispatchLibrary({ renderActionErr: errorMessage(e) });
+    }
+  }
+
+  async function addRenderLabel(render: RenderArtifact, kind: RenderLabelKind) {
+    try {
+      const label = await api.addRenderLabel(render.id, kind);
+      dispatchLibrary({
+        renderLabels: {
+          ...renderLabels,
+          [render.id]: [...(renderLabels[render.id] ?? []), label],
+        },
+        renderActionErr: null,
+      });
+    } catch (e) {
+      dispatchLibrary({ renderActionErr: errorMessage(e) });
+    }
+  }
+
+  async function deleteRenderLabel(render: RenderArtifact, label: RenderLabel) {
+    try {
+      await api.deleteRenderLabel(render.id, label.id);
+      dispatchLibrary({
+        renderLabels: {
+          ...renderLabels,
+          [render.id]: (renderLabels[render.id] ?? []).filter((item) => item.id !== label.id),
+        },
+        renderActionErr: null,
+      });
+    } catch (e) {
+      dispatchLibrary({ renderActionErr: errorMessage(e) });
     }
   }
 
@@ -311,12 +450,28 @@ export function LibraryPage() {
       </Section>
 
       <Section title="Transition graph">
-        <GraphSection
+        <TransitionGraphSection
           projects={projects}
           result={graphResult}
           error={graphErr}
           building={graphBuilding}
+          renderingCandidateIds={renderingCandidateIds}
           onBuild={() => void buildGraph()}
+          onRender={(candidate, technique) => void renderGraphCandidate(candidate, technique)}
+        />
+      </Section>
+
+      <Section title="Renders">
+        <RenderPanel
+          renders={renders}
+          labelsByRender={renderLabels}
+          error={rendersErr}
+          actionError={renderActionErr}
+          onRefresh={() => void refreshRenders()}
+          onCancel={(render) => void cancelRenderArtifact(render)}
+          onDelete={(render) => void deleteRenderArtifact(render)}
+          onAddLabel={(render, kind) => void addRenderLabel(render, kind)}
+          onDeleteLabel={(render, label) => void deleteRenderLabel(render, label)}
         />
       </Section>
 
@@ -366,6 +521,11 @@ type LibraryState = {
   graphResult: CandidateGraphBuildResult | null;
   graphErr: string | null;
   graphBuilding: boolean;
+  renders: RenderArtifact[];
+  renderLabels: Record<number, RenderLabel[]>;
+  rendersErr: string | null;
+  renderActionErr: string | null;
+  renderingCandidateIds: Set<number>;
   pluginOutput: string;
   ingestPath: string;
 };
@@ -382,6 +542,11 @@ const INITIAL_LIBRARY_STATE: LibraryState = {
   graphResult: null,
   graphErr: null,
   graphBuilding: false,
+  renders: [],
+  renderLabels: {},
+  rendersErr: null,
+  renderActionErr: null,
+  renderingCandidateIds: new Set(),
   pluginOutput: "",
   ingestPath: "",
 };
@@ -401,117 +566,24 @@ function errorMessage(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
 }
 
-function GraphSection({
-  projects,
-  result,
-  error,
-  building,
-  onBuild,
-}: {
-  projects: Project[];
-  result: CandidateGraphBuildResult | null;
-  error: string | null;
-  building: boolean;
-  onBuild: () => void;
-}) {
-  const latest = result?.project ?? projects[0] ?? null;
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="text-sm text-zinc-400">
-          {latest ? (
-            <>
-              project{" "}
-              <span className="font-mono text-zinc-200">
-                #{latest.id} {latest.name}
-              </span>
-            </>
-          ) : (
-            "no graph project yet"
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={onBuild}
-          disabled={building}
-          className="rounded bg-blue-600 px-3 py-1.5 text-xs hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {building ? "building…" : "build graph"}
-        </button>
-      </div>
-      {error && <p className="text-xs text-red-400">{error}</p>}
-      {result ? (
-        <div className="space-y-2">
-          <div className="grid grid-cols-3 gap-2 text-xs font-mono text-zinc-400">
-            <span>requested {result.requested_tracks}</span>
-            <span>usable {result.usable_tracks}</span>
-            <span>candidates {result.candidates.length}</span>
-          </div>
-          {result.warnings.map((warning) => (
-            <p key={warning} className="text-xs text-amber-300">
-              {warning}
-            </p>
-          ))}
-          {Object.keys(result.skipped_tracks).length > 0 && (
-            <p className="break-all text-xs text-zinc-500">
-              skipped{" "}
-              {Object.entries(result.skipped_tracks)
-                .map(([hash, reason]) => `${hash.slice(0, 8)}:${reason}`)
-                .join(", ")}
-            </p>
-          )}
-          {result.candidates.length > 0 ? (
-            <table className="w-full text-xs font-mono">
-              <thead className="text-left text-zinc-500">
-                <tr>
-                  <th className="py-1 pr-3">edge</th>
-                  <th className="py-1 pr-3">cue bars</th>
-                  <th className="py-1 pr-3">score</th>
-                  <th className="py-1 pr-3">tempo</th>
-                  <th className="py-1">techniques</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.candidates.slice(0, 12).map((candidate) => (
-                  <tr
-                    key={
-                      candidate.id ??
-                      `${candidate.from_track}-${candidate.to_track}`
-                    }
-                  >
-                    <td className="border-t border-zinc-800/50 py-1 pr-3">
-                      {candidate.from_track.slice(0, 8)} →{" "}
-                      {candidate.to_track.slice(0, 8)}
-                    </td>
-                    <td className="border-t border-zinc-800/50 py-1 pr-3">
-                      {candidate.from_cue_bar} → {candidate.to_cue_bar}
-                    </td>
-                    <td className="border-t border-zinc-800/50 py-1 pr-3">
-                      {candidate.scores.score.toFixed(3)}
-                    </td>
-                    <td className="border-t border-zinc-800/50 py-1 pr-3">
-                      {candidate.scores.tempo_delta_pct.toFixed(1)}%
-                    </td>
-                    <td className="border-t border-zinc-800/50 py-1">
-                      {candidate.allowed_techniques.join(", ")}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <p className="text-sm text-zinc-500">
-              no mechanically compatible edges yet
-            </p>
-          )}
-        </div>
-      ) : (
-        <p className="text-sm text-zinc-500">
-          builds phrase-aligned candidate edges from current TrackProfiles
-        </p>
-      )}
-    </div>
+async function labelsForRenders(
+  renders: RenderArtifact[],
+  opts?: { signal?: AbortSignal },
+): Promise<Record<number, RenderLabel[]>> {
+  const entries = await Promise.all(
+    renders.map(async (render) => [render.id, await api.listRenderLabels(render.id, opts)] as const),
   );
+  return Object.fromEntries(entries);
+}
+
+function upsertRender(renders: RenderArtifact[], render: RenderArtifact): RenderArtifact[] {
+  const existing = renders.findIndex((item) => item.id === render.id);
+  if (existing === -1) {
+    return [render, ...renders];
+  }
+  const next = [...renders];
+  next[existing] = render;
+  return next;
 }
 
 function RollupSection({
