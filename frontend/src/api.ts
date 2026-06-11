@@ -203,6 +203,68 @@ export type ProfileCoverage = {
   missing: number;
 };
 
+// ---------------------------------------------------------------------------
+// Projects + Transition Candidate Graph (Phase 3)
+// ---------------------------------------------------------------------------
+
+export type Project = {
+  id: number;
+  name: string;
+  intent: string | null;
+  plan: Record<string, unknown> | null;
+  render_artifact_key: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type CandidateVerification =
+  | "verified"
+  | "partial"
+  | "unverified"
+  | "has_failure_label";
+
+export type TransitionTechnique =
+  | "phrase_swap"
+  | "filter_blend"
+  | "long_crossfade"
+  | "echo_out";
+
+export type TransitionScores = {
+  score: number;
+  tempo_delta_pct: number;
+  from_bpm: number;
+  to_bpm: number;
+  from_cue_sec: number;
+  to_cue_sec: number;
+  phrase_bars: number;
+  key_compatible: boolean | null;
+  verification: CandidateVerification;
+  from_source: string;
+  to_source: string;
+  reasons: string[];
+};
+
+export type TransitionCandidate = {
+  id: number | null;
+  project_id: number;
+  from_track: string;
+  to_track: string;
+  from_cue_bar: number;
+  to_cue_bar: number;
+  scores: TransitionScores;
+  allowed_techniques: TransitionTechnique[];
+  created_at: string | null;
+};
+
+export type CandidateGraphBuildResult = {
+  project: Project;
+  requested_tracks: number;
+  usable_tracks: number;
+  skipped_tracks: Record<string, string>;
+  candidates: TransitionCandidate[];
+  warnings: string[];
+};
+
 /**
  * Per-request options. ``signal`` cancels the fetch when an AbortController is
  * aborted (cleanup on unmount). ``timeoutMs`` aborts on a deadline — useful
@@ -362,4 +424,38 @@ export const api = {
   /** Library-wide coverage bucket counts (ready+partial+blocked+missing = total). */
   getProfileCoverage: (opts?: RequestOptions) =>
     req<ProfileCoverage>("/profiles/coverage", undefined, opts),
+
+  // -------------------------------------------------------------------------
+  // Projects + transition candidate graph (Phase 3)
+  // -------------------------------------------------------------------------
+
+  createProject: (
+    body: { name: string; intent?: string | null; plan?: Record<string, unknown> | null },
+    opts?: RequestOptions,
+  ) =>
+    req<Project>(
+      "/projects",
+      { method: "POST", body: JSON.stringify(body) },
+      opts,
+    ),
+  listProjects: (opts?: RequestOptions) =>
+    req<Project[]>("/projects", undefined, opts),
+  getProject: (projectId: number, opts?: RequestOptions) =>
+    req<Project>(`/projects/${projectId}`, undefined, opts),
+  buildCandidateGraph: (
+    projectId: number,
+    body: {
+      track_hashes?: string[] | null;
+      max_candidates_per_pair?: number;
+      force?: boolean;
+    } = {},
+    opts?: RequestOptions,
+  ) =>
+    req<CandidateGraphBuildResult>(
+      `/projects/${projectId}/candidates/build`,
+      { method: "POST", body: JSON.stringify(body) },
+      opts,
+    ),
+  listCandidates: (projectId: number, opts?: RequestOptions) =>
+    req<TransitionCandidate[]>(`/projects/${projectId}/candidates`, undefined, opts),
 };

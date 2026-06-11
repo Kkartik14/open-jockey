@@ -129,6 +129,31 @@ class Job(_ModelBase):
         )
 
 
+class Project(_ModelBase):
+    """A mix project. Phase 3 uses this as the owner for candidate graph edges."""
+
+    id: int
+    name: str
+    intent: str | None = None
+    plan: dict[str, Any] | None = None
+    render_artifact_key: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> Self:
+        d = dict(row)
+        return cls(
+            id=d["id"],
+            name=d["name"],
+            intent=d.get("intent"),
+            plan=json.loads(d["plan_json"]) if d.get("plan_json") else None,
+            render_artifact_key=d.get("render_artifact_key"),
+            created_at=d.get("created_at"),
+            updated_at=d.get("updated_at"),
+        )
+
+
 class AnalysisRun(_ModelBase):
     id: int
     track_hash: str
@@ -444,3 +469,102 @@ class TrackProfile(_ModelBase):
         """Profile data lives entirely in the JSON column; other columns are
         denormalised for indexed queries. The JSON is the truth."""
         return cls.model_validate(json.loads(dict(row)["profile_json"]))
+
+
+# ---------------------------------------------------------------------------
+# Transition Candidate Graph (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+class CandidateVerification(StrEnum):
+    """Whether the analyzer evidence under an edge has human listening labels."""
+
+    VERIFIED = "verified"
+    PARTIAL = "partial"
+    UNVERIFIED = "unverified"
+    HAS_FAILURE_LABEL = "has_failure_label"
+
+
+class TransitionTechnique(StrEnum):
+    """Renderer technique names a candidate can legally advertise.
+
+    The renderer is not built yet; these are contract names only. Candidates may
+    list several compatible techniques so a future planner can choose among
+    deterministic render paths without inventing cue points.
+    """
+
+    PHRASE_SWAP = "phrase_swap"
+    FILTER_BLEND = "filter_blend"
+    LONG_CROSSFADE = "long_crossfade"
+    ECHO_OUT = "echo_out"
+
+
+class TransitionScores(_ModelBase):
+    """Stored scoring/explanation payload for one candidate edge."""
+
+    score: float = Field(ge=0.0, le=1.0)
+    tempo_delta_pct: float = Field(ge=0.0)
+    from_bpm: float = Field(gt=0.0)
+    to_bpm: float = Field(gt=0.0)
+    from_cue_sec: float = Field(ge=0.0)
+    to_cue_sec: float = Field(ge=0.0)
+    phrase_bars: int = Field(ge=1)
+    key_compatible: bool | None = None
+    verification: CandidateVerification = CandidateVerification.UNVERIFIED
+    from_source: str
+    to_source: str
+    reasons: list[str] = Field(default_factory=list)
+
+
+class TransitionCandidate(_ModelBase):
+    """One directed transition edge from ``from_track`` to ``to_track``."""
+
+    id: int | None = None
+    project_id: int
+    from_track: str
+    to_track: str
+    from_cue_bar: int = Field(ge=0)
+    to_cue_bar: int = Field(ge=0)
+    scores: TransitionScores
+    allowed_techniques: list[TransitionTechnique]
+    created_at: str | None = None
+
+    @model_validator(mode="after")
+    def _edge_is_usable(self) -> Self:
+        if self.from_track == self.to_track:
+            raise ValueError("transition candidate cannot point from a track to itself")
+        if not self.allowed_techniques:
+            raise ValueError("transition candidate needs at least one allowed technique")
+        return self
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> Self:
+        d = dict(row)
+        raw_techniques = d.get("allowed_techniques") or "[]"
+        techniques = json.loads(raw_techniques)
+        if not isinstance(techniques, list):
+            raise ValueError("allowed_techniques must be a JSON list")
+        return cls(
+            id=d["id"],
+            project_id=d["project_id"],
+            from_track=d["from_track"],
+            to_track=d["to_track"],
+            from_cue_bar=d["from_cue_bar"],
+            to_cue_bar=d["to_cue_bar"],
+            scores=TransitionScores.model_validate(json.loads(d["scores_json"] or "{}")),
+            allowed_techniques=[
+                TransitionTechnique(t) for t in techniques
+            ],
+            created_at=d.get("created_at"),
+        )
+
+
+class CandidateGraphBuildResult(_ModelBase):
+    """Result of one deterministic Phase 3 graph build."""
+
+    project: Project
+    requested_tracks: int
+    usable_tracks: int
+    skipped_tracks: dict[str, str] = Field(default_factory=dict)
+    candidates: list[TransitionCandidate]
+    warnings: list[str] = Field(default_factory=list)

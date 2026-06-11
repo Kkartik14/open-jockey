@@ -23,7 +23,7 @@ def test_health(client: TestClient, tmp_aidj) -> None:
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == 5
+    assert body["schema_version"] == 6
     assert body["project_root"] == str(tmp_aidj.project_root)
 
 
@@ -401,3 +401,134 @@ def test_profile_coverage_buckets_are_exhaustive(
     r = client.get("/api/profiles/coverage")
     assert r.status_code == 200
     assert r.json() == {"ready": 0, "partial": 1, "blocked": 1, "missing": 1}
+
+
+# ---------------------------------------------------------------------------
+# Projects + transition candidate graph endpoints (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def test_create_list_get_project(client: TestClient) -> None:
+    r = client.post(
+        "/api/projects",
+        json={"name": " Truth Test ", "intent": "build candidate graph"},
+    )
+    assert r.status_code == 201
+    project = r.json()
+    assert project["name"] == "Truth Test"
+    assert project["intent"] == "build candidate graph"
+
+    listed = client.get("/api/projects")
+    assert listed.status_code == 200
+    assert [p["id"] for p in listed.json()] == [project["id"]]
+
+    fetched = client.get(f"/api/projects/{project['id']}")
+    assert fetched.status_code == 200
+    assert fetched.json()["name"] == "Truth Test"
+
+
+def test_delete_project_removes_project_and_candidates(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    a = tmp_path / "a.bin"
+    b = tmp_path / "b.bin"
+    a.write_bytes(b"a" * 32)
+    b.write_bytes(b"b" * 32)
+    ta = tracks.ingest(a)
+    tb = tracks.ingest(b)
+    _upsert_completed_run(ta.content_hash, "librosa", "0.1.0", _beatgrid_output(bpm=124.0))
+    _upsert_completed_run(tb.content_hash, "librosa", "0.1.0", _beatgrid_output(bpm=126.0))
+    client.post(f"/api/tracks/{ta.content_hash}/profile/build")
+    client.post(f"/api/tracks/{tb.content_hash}/profile/build")
+    project = client.post("/api/projects", json={"name": "delete me"}).json()
+    built = client.post(
+        f"/api/projects/{project['id']}/candidates/build",
+        json={"track_hashes": [ta.content_hash, tb.content_hash]},
+    )
+    assert built.status_code == 200
+    assert built.json()["candidates"]
+
+    deleted = client.delete(f"/api/projects/{project['id']}")
+
+    assert deleted.status_code == 204
+    assert client.get(f"/api/projects/{project['id']}").status_code == 404
+    assert client.get(f"/api/projects/{project['id']}/candidates").status_code == 404
+    assert client.delete(f"/api/projects/{project['id']}").status_code == 404
+
+
+def test_get_project_404_for_unknown_project(client: TestClient) -> None:
+    r = client.get("/api/projects/999")
+    assert r.status_code == 404
+
+
+def test_candidate_build_404_for_unknown_project(client: TestClient) -> None:
+    r = client.post("/api/projects/999/candidates/build", json={})
+    assert r.status_code == 404
+
+
+def test_candidate_build_creates_directed_edges(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    a = tmp_path / "a.bin"
+    b = tmp_path / "b.bin"
+    a.write_bytes(b"a" * 32)
+    b.write_bytes(b"b" * 32)
+    ta = tracks.ingest(a)
+    tb = tracks.ingest(b)
+    _upsert_completed_run(ta.content_hash, "librosa", "0.1.0", _beatgrid_output(bpm=124.0))
+    _upsert_completed_run(tb.content_hash, "librosa", "0.1.0", _beatgrid_output(bpm=126.0))
+    client.post(f"/api/tracks/{ta.content_hash}/profile/build")
+    client.post(f"/api/tracks/{tb.content_hash}/profile/build")
+    project = client.post("/api/projects", json={"name": "candidate test"}).json()
+
+    r = client.post(
+        f"/api/projects/{project['id']}/candidates/build",
+        json={"track_hashes": [ta.content_hash, tb.content_hash], "max_candidates_per_pair": 1},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["requested_tracks"] == 2
+    assert body["usable_tracks"] == 2
+    assert len(body["candidates"]) == 2
+    directions = {(c["from_track"], c["to_track"]) for c in body["candidates"]}
+    assert directions == {
+        (ta.content_hash, tb.content_hash),
+        (tb.content_hash, ta.content_hash),
+    }
+    for candidate in body["candidates"]:
+        assert candidate["from_track"] != candidate["to_track"]
+        assert candidate["scores"]["from_source"] == "librosa@0.1.0"
+        assert candidate["scores"]["to_source"] == "librosa@0.1.0"
+        assert candidate["scores"]["verification"] == "unverified"
+        assert candidate["allowed_techniques"]
+
+    listed = client.get(f"/api/projects/{project['id']}/candidates")
+    assert listed.status_code == 200
+    assert len(listed.json()) == 2
+
+
+def test_candidate_build_reports_skipped_tracks(
+    client: TestClient,
+    sample_file: Path,
+) -> None:
+    track = tracks.ingest(sample_file)
+    project = client.post("/api/projects", json={"name": "skip test"}).json()
+
+    r = client.post(
+        f"/api/projects/{project['id']}/candidates/build",
+        json={"track_hashes": [track.content_hash, "0" * 64]},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["usable_tracks"] == 0
+    assert body["skipped_tracks"][track.content_hash] == "profile_missing"
+    assert body["skipped_tracks"]["0" * 64] == "track_missing"
+
+
+def test_list_candidates_404_for_unknown_project(client: TestClient) -> None:
+    r = client.get("/api/projects/999/candidates")
+    assert r.status_code == 404

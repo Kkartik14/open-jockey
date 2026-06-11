@@ -8,10 +8,12 @@ import { Link } from "react-router-dom";
 import {
   api,
   type AnalysisLabelKind,
+  type CandidateGraphBuildResult,
   type Health,
   type Job,
   type LabelRollup,
   type Plugin,
+  type Project,
   type Track,
 } from "../api";
 import { Section, StatusPill } from "../components/ui";
@@ -31,6 +33,10 @@ export function LibraryPage() {
     jobs,
     rollup,
     rollupErr,
+    projects,
+    graphResult,
+    graphErr,
+    graphBuilding,
     pluginOutput,
     ingestPath,
   } = state;
@@ -46,13 +52,23 @@ export function LibraryPage() {
   async function refresh(signal?: AbortSignal) {
     const seq = ++refreshSeqRef.current;
     const opts = signal ? { signal } : undefined;
-    const [healthResult, pluginsResult, tracksResult, jobsResult, rollupResult] =
+    const [
+      healthResult,
+      pluginsResult,
+      tracksResult,
+      jobsResult,
+      rollupResult,
+      projectsResult,
+    ] =
+      // Single-user polling is acceptable here. Before any multi-user/shared
+      // deployment, split these probes by cadence or add backoff.
       await Promise.allSettled([
         api.health(opts),
         api.listPlugins(opts),
         api.listTracks(opts),
         api.listJobs(opts),
         api.getLabelRollup(opts),
+        api.listProjects(opts),
       ]);
     if (
       !mountedRef.current ||
@@ -99,6 +115,12 @@ export function LibraryPage() {
       patch.rollupErr = errorMessage(rollupResult.reason);
       console.error("getLabelRollup failed", rollupResult.reason);
     }
+
+    if (projectsResult.status === "fulfilled") {
+      patch.projects = projectsResult.value;
+    } else {
+      console.error("listProjects failed", projectsResult.reason);
+    }
     dispatchLibrary(patch);
   }
 
@@ -133,6 +155,32 @@ export function LibraryPage() {
       await refresh();
     } catch (e) {
       alert((e as Error).message);
+    }
+  }
+
+  async function buildGraph() {
+    dispatchLibrary({ graphBuilding: true, graphErr: null });
+    try {
+      const project =
+        projects[0] ??
+        (await api.createProject({
+          name: `Truth test graph ${new Date().toLocaleString()}`,
+          intent: "Phase 3 mechanical transition candidate graph",
+        }));
+      const result = await api.buildCandidateGraph(project.id, {
+        force: true,
+        max_candidates_per_pair: 3,
+      });
+      dispatchLibrary({
+        graphResult: result,
+        projects: projects.some((p) => p.id === project.id)
+          ? projects
+          : [project, ...projects],
+      });
+    } catch (e) {
+      dispatchLibrary({ graphErr: errorMessage(e) });
+    } finally {
+      dispatchLibrary({ graphBuilding: false });
     }
   }
 
@@ -190,6 +238,7 @@ export function LibraryPage() {
                 </div>
               </div>
               <button
+                type="button"
                 onClick={() => pingPlugin(p.name)}
                 className="rounded bg-zinc-700 px-3 py-1 text-xs hover:bg-zinc-600"
                 title="Calls plugin.ping — every plugin supports this via the SDK"
@@ -217,6 +266,7 @@ export function LibraryPage() {
             className="flex-1 rounded border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm font-mono placeholder-zinc-600 focus:border-zinc-600 focus:outline-none"
           />
           <button
+            type="button"
             onClick={ingest}
             className="rounded bg-blue-600 px-4 py-2 text-sm hover:bg-blue-500"
           >
@@ -258,6 +308,16 @@ export function LibraryPage() {
 
       <Section title="Bake-off rollup">
         <RollupSection rollup={rollup} error={rollupErr} />
+      </Section>
+
+      <Section title="Transition graph">
+        <GraphSection
+          projects={projects}
+          result={graphResult}
+          error={graphErr}
+          building={graphBuilding}
+          onBuild={() => void buildGraph()}
+        />
       </Section>
 
       <Section title="Jobs">
@@ -302,6 +362,10 @@ type LibraryState = {
   jobs: Job[];
   rollup: LabelRollup | null;
   rollupErr: string | null;
+  projects: Project[];
+  graphResult: CandidateGraphBuildResult | null;
+  graphErr: string | null;
+  graphBuilding: boolean;
   pluginOutput: string;
   ingestPath: string;
 };
@@ -314,6 +378,10 @@ const INITIAL_LIBRARY_STATE: LibraryState = {
   jobs: [],
   rollup: null,
   rollupErr: null,
+  projects: [],
+  graphResult: null,
+  graphErr: null,
+  graphBuilding: false,
   pluginOutput: "",
   ingestPath: "",
 };
@@ -331,6 +399,119 @@ function libraryReducer(
 
 function errorMessage(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
+}
+
+function GraphSection({
+  projects,
+  result,
+  error,
+  building,
+  onBuild,
+}: {
+  projects: Project[];
+  result: CandidateGraphBuildResult | null;
+  error: string | null;
+  building: boolean;
+  onBuild: () => void;
+}) {
+  const latest = result?.project ?? projects[0] ?? null;
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="text-sm text-zinc-400">
+          {latest ? (
+            <>
+              project{" "}
+              <span className="font-mono text-zinc-200">
+                #{latest.id} {latest.name}
+              </span>
+            </>
+          ) : (
+            "no graph project yet"
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onBuild}
+          disabled={building}
+          className="rounded bg-blue-600 px-3 py-1.5 text-xs hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {building ? "building…" : "build graph"}
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-400">{error}</p>}
+      {result ? (
+        <div className="space-y-2">
+          <div className="grid grid-cols-3 gap-2 text-xs font-mono text-zinc-400">
+            <span>requested {result.requested_tracks}</span>
+            <span>usable {result.usable_tracks}</span>
+            <span>candidates {result.candidates.length}</span>
+          </div>
+          {result.warnings.map((warning) => (
+            <p key={warning} className="text-xs text-amber-300">
+              {warning}
+            </p>
+          ))}
+          {Object.keys(result.skipped_tracks).length > 0 && (
+            <p className="break-all text-xs text-zinc-500">
+              skipped{" "}
+              {Object.entries(result.skipped_tracks)
+                .map(([hash, reason]) => `${hash.slice(0, 8)}:${reason}`)
+                .join(", ")}
+            </p>
+          )}
+          {result.candidates.length > 0 ? (
+            <table className="w-full text-xs font-mono">
+              <thead className="text-left text-zinc-500">
+                <tr>
+                  <th className="py-1 pr-3">edge</th>
+                  <th className="py-1 pr-3">cue bars</th>
+                  <th className="py-1 pr-3">score</th>
+                  <th className="py-1 pr-3">tempo</th>
+                  <th className="py-1">techniques</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.candidates.slice(0, 12).map((candidate) => (
+                  <tr
+                    key={
+                      candidate.id ??
+                      `${candidate.from_track}-${candidate.to_track}`
+                    }
+                  >
+                    <td className="border-t border-zinc-800/50 py-1 pr-3">
+                      {candidate.from_track.slice(0, 8)} →{" "}
+                      {candidate.to_track.slice(0, 8)}
+                    </td>
+                    <td className="border-t border-zinc-800/50 py-1 pr-3">
+                      {candidate.from_cue_bar} → {candidate.to_cue_bar}
+                    </td>
+                    <td className="border-t border-zinc-800/50 py-1 pr-3">
+                      {candidate.scores.score.toFixed(3)}
+                    </td>
+                    <td className="border-t border-zinc-800/50 py-1 pr-3">
+                      {candidate.scores.tempo_delta_pct.toFixed(1)}%
+                    </td>
+                    <td className="border-t border-zinc-800/50 py-1">
+                      {candidate.allowed_techniques.join(", ")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="text-sm text-zinc-500">
+              no mechanically compatible edges yet
+            </p>
+          )}
+        </div>
+      ) : (
+        <p className="text-sm text-zinc-500">
+          builds phrase-aligned candidate edges from current TrackProfiles
+        </p>
+      )}
+    </div>
+  );
 }
 
 function RollupSection({

@@ -39,7 +39,7 @@ export default function App() {
       <header className="flex items-center justify-between border-b border-zinc-800 pb-4">
         <Link to="/" className="block">
           <h1 className="text-2xl font-semibold text-zinc-100">aidj</h1>
-          <p className="text-sm text-zinc-500">Phase 1 — analyzer</p>
+          <p className="text-sm text-zinc-500">Phase 3 — candidate graph</p>
         </Link>
         <HealthBadge health={health} err={healthErr} />
       </header>

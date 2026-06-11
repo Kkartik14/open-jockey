@@ -20,22 +20,39 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aidj import __version__
 from aidj.audio import peaks as audio_peaks
+from aidj.candidate_graph import (
+    DEFAULT_MAX_CANDIDATES_PER_PAIR,
+    ProjectNotFoundError,
+    build_candidate_graph,
+)
 from aidj.config import settings
 from aidj.plugins.manifest import Hardware
 from aidj.plugins.registry import registry
 from aidj.plugins.runtime import Plugin, PluginError
 from aidj.profile_builder import TrackNotFoundError, build_profile
-from aidj.store import analysis_labels, analysis_runs, db, jobs, track_profiles, tracks
+from aidj.store import (
+    analysis_labels,
+    analysis_runs,
+    candidates,
+    db,
+    jobs,
+    projects,
+    track_profiles,
+    tracks,
+)
 from aidj.store.models import (
     AnalysisLabel,
     AnalysisLabelKind,
     AnalysisRun,
     BeatGridAnalysis,
+    CandidateGraphBuildResult,
     Job,
     JobStatus,
     KeyAnalysis,
+    Project,
     Track,
     TrackProfile,
+    TransitionCandidate,
 )
 
 CLOUD_AUDIO_OPT_IN_ENV = "AIDJ_ALLOW_CLOUD_AUDIO"
@@ -137,6 +154,26 @@ class EnqueueRequest(BaseModel):
     kind: str
     payload: dict[str, Any] = Field(default_factory=dict)
     max_retries: int = 3
+
+
+class CreateProjectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    intent: str | None = Field(default=None, max_length=2000)
+    plan: dict[str, Any] | None = None
+
+
+class BuildCandidateGraphRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    track_hashes: list[str] | None = Field(default=None)
+    max_candidates_per_pair: int = Field(
+        default=DEFAULT_MAX_CANDIDATES_PER_PAIR,
+        ge=1,
+        le=5,
+    )
+    force: bool = True
 
 
 class EnqueueResponse(BaseModel):
@@ -765,6 +802,72 @@ def get_profile_coverage() -> ProfileCoverageResponse:
         blocked=counts["blocked"],
         missing=counts["missing"],
     )
+
+
+# ---------------------------------------------------------------------------
+# Projects + Transition Candidate Graph (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/projects", response_model=Project, status_code=201)
+def create_project(body: CreateProjectRequest) -> Project:
+    try:
+        return projects.create(body.name, intent=body.intent, plan=body.plan)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/projects", response_model=list[Project])
+def list_projects(limit: int = Query(100, ge=1, le=1000)) -> list[Project]:
+    return projects.list_recent(limit=limit)
+
+
+@app.get("/api/projects/{project_id}", response_model=Project)
+def get_project(project_id: int) -> Project:
+    project = projects.get(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"project not found: {project_id}")
+    return project
+
+
+@app.delete("/api/projects/{project_id}", status_code=204)
+def delete_project(project_id: int) -> None:
+    if not projects.delete(project_id):
+        raise HTTPException(status_code=404, detail=f"project not found: {project_id}")
+
+
+@app.post(
+    "/api/projects/{project_id}/candidates/build",
+    response_model=CandidateGraphBuildResult,
+)
+def build_project_candidates(
+    project_id: int,
+    body: BuildCandidateGraphRequest,
+) -> CandidateGraphBuildResult:
+    try:
+        return build_candidate_graph(
+            project_id,
+            track_hashes=body.track_hashes,
+            max_candidates_per_pair=body.max_candidates_per_pair,
+            force=body.force,
+        )
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get(
+    "/api/projects/{project_id}/candidates",
+    response_model=list[TransitionCandidate],
+)
+def list_project_candidates(
+    project_id: int,
+    limit: int = Query(1000, ge=1, le=10_000),
+) -> list[TransitionCandidate]:
+    if projects.get(project_id) is None:
+        raise HTTPException(status_code=404, detail=f"project not found: {project_id}")
+    return candidates.list_for_project(project_id, limit=limit)
 
 
 # ---------------------------------------------------------------------------

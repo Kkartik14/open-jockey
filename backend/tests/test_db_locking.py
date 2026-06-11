@@ -7,6 +7,7 @@ under threading load.
 """
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 
@@ -185,6 +186,109 @@ def test_schema_migration_adds_track_profiles_to_old_db(tmp_path: Path) -> None:
     assert len(surviving) == 1
     empty = db.fetch_all("SELECT * FROM track_profiles")
     assert empty == []
+
+
+def test_schema_migration_adds_candidate_track_cascades(tmp_path: Path) -> None:
+    """A pre-v6 DB should rebuild candidates with endpoint-track cascades.
+
+    Invalid legacy orphans are dropped during the rebuild; otherwise the
+    migration itself would fail when the new FK actions are enforced.
+    """
+    import sqlite3
+
+    db_path = tmp_path / "legacy_candidate_fks.db"
+    left = "a" * 64
+    right = "b" * 64
+    missing = "c" * 64
+    scores = {
+        "score": 0.9,
+        "tempo_delta_pct": 1.0,
+        "from_bpm": 124.0,
+        "to_bpm": 126.0,
+        "from_cue_sec": 30.0,
+        "to_cue_sec": 0.0,
+        "phrase_bars": 8,
+        "key_compatible": None,
+        "verification": "unverified",
+        "from_source": "librosa@0.1.0",
+        "to_source": "librosa@0.1.0",
+        "reasons": [],
+    }
+
+    legacy = sqlite3.connect(db_path)
+    legacy.executescript(
+        """
+        CREATE TABLE tracks (
+            content_hash TEXT PRIMARY KEY,
+            source_path TEXT NOT NULL,
+            duration_sec REAL,
+            sample_rate INTEGER,
+            channels INTEGER,
+            format TEXT,
+            bitrate INTEGER,
+            file_size INTEGER,
+            genre TEXT,
+            last_seen TEXT,
+            created_at TEXT
+        );
+        CREATE TABLE projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            intent TEXT,
+            plan_json TEXT,
+            render_artifact_key TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            from_track TEXT NOT NULL REFERENCES tracks(content_hash),
+            to_track TEXT NOT NULL REFERENCES tracks(content_hash),
+            from_cue_bar INTEGER,
+            to_cue_bar INTEGER,
+            scores_json TEXT,
+            allowed_techniques TEXT,
+            created_at TEXT
+        );
+        CREATE INDEX idx_candidates_project ON candidates(project_id);
+        """
+    )
+    legacy.execute(
+        "INSERT INTO tracks(content_hash, source_path) VALUES (?, ?), (?, ?)",
+        (left, "/tmp/left.wav", right, "/tmp/right.wav"),
+    )
+    legacy.execute("INSERT INTO projects(id, name) VALUES (1, 'legacy')")
+    for candidate_id, from_track, to_track in [(1, left, right), (2, missing, right)]:
+        legacy.execute(
+            "INSERT INTO candidates "
+            "(id, project_id, from_track, to_track, from_cue_bar, to_cue_bar, "
+            "scores_json, allowed_techniques) "
+            "VALUES (?, 1, ?, ?, 0, 0, ?, ?)",
+            (
+                candidate_id,
+                from_track,
+                to_track,
+                json.dumps(scores),
+                json.dumps(["long_crossfade"]),
+            ),
+        )
+    legacy.commit()
+    legacy.close()
+
+    db.reset_for_tests(db_path)
+
+    track_fks = {
+        row["from"]: row["on_delete"]
+        for row in db.fetch_all("PRAGMA foreign_key_list(candidates)")
+        if row["table"] == "tracks"
+    }
+    assert track_fks == {"to_track": "CASCADE", "from_track": "CASCADE"}
+    surviving = db.fetch_all("SELECT id FROM candidates")
+    assert [row["id"] for row in surviving] == [1]
+
+    assert tracks.delete(left) is True
+    assert db.fetch_all("SELECT id FROM candidates") == []
 
 
 def test_schema_migration_adds_genre_to_old_tracks_table(tmp_path: Path) -> None:

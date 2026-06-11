@@ -452,6 +452,7 @@ function RunAnalyzerSection({
           ))}
         </select>
         <button
+          type="button"
           onClick={() => void onRun(false)}
           disabled={running || !selectedAnalyzer}
           className="rounded bg-blue-600 px-4 py-2 text-sm hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
@@ -459,6 +460,7 @@ function RunAnalyzerSection({
           {running ? "running…" : "run"}
         </button>
         <button
+          type="button"
           onClick={() => void onRun(true)}
           disabled={running || !selectedAnalyzer}
           className="rounded bg-zinc-700 px-3 py-2 text-xs hover:bg-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"

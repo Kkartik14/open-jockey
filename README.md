@@ -1,6 +1,6 @@
 # open-jockey
 
-> A personal, local-first AI DJ — *in active development*. Goal: point it at a folder of music, get back a continuous DJ-style mix, with audio never leaving your machine. **Today the analyzer/labeling/profile layers exist; the mixing layers (Candidate Graph, Planner, Renderer) do not. The tool cannot produce a mix yet.**
+> A personal, local-first AI DJ — *in active development*. Goal: point it at a folder of music, get back a continuous DJ-style mix, with audio never leaving your machine. **Today the analyzer/labeling/profile layers and an experimental Transition Candidate Graph exist. Planner and Renderer do not. The tool cannot produce a mix yet.**
 
 The design splits the work into four layers (see [How it works](#how-it-works)). When complete, open-jockey will do the analysis, planning, and rendering locally so a folder of songs becomes a continuous set without manual beatmatching, cue points, or transition planning. The diagram below describes the *design target*; the [Status](#status) and [Roadmap](#roadmap) sections describe what's actually built today.
 
@@ -18,22 +18,22 @@ What's actually built today:
 
 - ✅ Phase 0 foundation — project store (SQLite + content-addressed cache), plugin runtime (uv-managed subprocess per plugin), FastAPI app, React/Vite frontend, full pytest suite.
 - ✅ Phase 1 analyzer pipeline — `BeatGridAnalysis` + `KeyAnalysis` schemas, atomic `analysis_runs` lifecycle (claim-token, force, stale recovery), analyze API + dual beat-grid UI with click-track verification, 8 structured failure-mode labels with per-analyzer / per-genre rollup. Plugins: `allin1` (local — currently broken on `madmom` import; quarantined behind `allin1_remote`), `allin1_remote` (Modal GPU, cloud-audio-gated), `librosa` (local baseline), `essentia` (locked, real-hardware run unverified). `madmom_msaf` quarantined.
-- 🚧 Phase 2 — Canonical Track Intelligence (3 of 8 steps in): `TrackProfile` contract + provenance + readiness, `track_profiles` repository, deterministic profile builder, thin profile API (`GET/POST .../profile`, `GET /profiles/coverage`). **Still to do**: energy analyzer, lazy demucs + vocal windows, batch profile build, profile-coverage UI, label-driven analyzer selection. **No real-track listening test has been run yet** — see `private/plan.md`.
+- 🚧 Phase 2 — Canonical Track Intelligence (3 of 8 steps in): `TrackProfile` contract + provenance + readiness, `track_profiles` repository, deterministic profile builder, thin profile API (`GET/POST .../profile`, `GET /profiles/coverage`). **Still to do**: energy analyzer, lazy demucs + vocal windows, batch profile build, profile-coverage UI, label-driven analyzer selection. **Real-track analyzer output has been generated, but click-track PASS/FAIL labels still need human listening** — see `private/plan.md`.
+- 🚧 Phase 3 — Transition Candidate Graph: typed `Project`/`TransitionCandidate` contract, project/candidate repositories, deterministic phrase-aligned graph builder, graph API, and a small Library inspection panel. Edges are mechanical candidates over current `TrackProfile` data, not proof that the underlying beat grids are musically correct.
 
 What's NOT built and what the architecture diagram below describes as *design intent* only:
 
-- ❌ Phase 3 Transition Candidate Graph
 - ❌ Phase 4 Renderer / automation envelopes (no mix has ever been produced)
 - ❌ Phase 5 Planner (LLM or local heuristic)
 - ❌ Phases 6–7 plan editing UI, polish
 
-The `projects`, `candidates`, and `stems` SQLite tables exist as empty stubs to reserve the schema; no code populates them yet.
+The `stems` SQLite table still exists as an empty stub to reserve the schema; no code populates stems yet.
 
 See [Roadmap](#roadmap) for the full table.
 
 ## How it works
 
-**Design target (not all layers built — see [Status](#status)).** Four layers, with the **Transition Candidate Graph** acting as a hard contract between deterministic analysis and the non-deterministic LLM. Today only the Project Store and Analyzer (+ the in-progress canonical `TrackProfile` layer on top) exist; Candidate Graph, Planner, and Renderer are the still-to-do work:
+**Design target (not all layers built — see [Status](#status)).** Four layers, with the **Transition Candidate Graph** acting as a hard contract between deterministic analysis and the non-deterministic LLM. Today the Project Store, Analyzer, in-progress canonical `TrackProfile` layer, and an initial mechanical Candidate Graph exist; Planner and Renderer are the still-to-do work:
 
 ```
                 +------------------------------------+
@@ -140,8 +140,8 @@ uv run aidj serve --reload --port 8000
 | --- | --- | --- |
 | 0 | Project Store, plugin runtime, FastAPI app, frontend skeleton, test suite | done |
 | 1 | Analyzer pipeline (schema/repo/API/plugin contract), `allin1` + `allin1_remote` + `librosa` + `essentia` plugins, dual beat-grid UI, click-track verification, structured failure-mode labels, per-analyzer + per-genre rollup | done (running the bake-off itself is user activity) |
-| 2 | **Canonical Track Intelligence**: `TrackProfile` contract + persistence, deterministic profile builder, local energy analyzer, lazy demucs stem bake-off + vocal windows, batch profile build, profile-coverage UI, label-driven analyzer selection | in progress (step 1: contract + persistence) |
-| 3 | Transition Candidate Graph: cue-point extraction, edge generation, scoring, pruning | |
+| 2 | **Canonical Track Intelligence**: `TrackProfile` contract + persistence, deterministic profile builder, local energy analyzer, lazy demucs stem bake-off + vocal windows, batch profile build, profile-coverage UI, label-driven analyzer selection | in progress (builder/API landed; energy/vocals/batch/label-aware selection still open) |
+| 3 | Transition Candidate Graph: cue-point extraction, edge generation, scoring, pruning | experimental mechanical graph landed |
 | 4 | Renderer with automation envelopes, all transition techniques | |
 | 5 | Planner: `LocalHeuristicPlanner` baseline + `AnthropicPlanner` with structured outputs + validator | |
 | 6 | Plan editing UI, partial re-render | |

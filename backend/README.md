@@ -98,6 +98,13 @@ Open <http://127.0.0.1:8000/docs> while the server runs for the live OpenAPI spe
 | POST | `/api/tracks/{hash}/analyze/{analyzer}` | `AnalysisRun` |
 | GET | `/api/tracks/{hash}/analyses` | `list[AnalysisRun]` |
 | GET | `/api/tracks/{hash}/analyses/{analyzer}` | `AnalysisRun` |
+| GET | `/api/tracks/{hash}/profile` | `TrackProfile` |
+| POST | `/api/tracks/{hash}/profile/build` | `TrackProfile` |
+| GET | `/api/profiles/coverage` | `ProfileCoverageResponse` |
+| POST | `/api/projects` | `Project` |
+| GET | `/api/projects` | `list[Project]` |
+| POST | `/api/projects/{id}/candidates/build` | `CandidateGraphBuildResult` |
+| GET | `/api/projects/{id}/candidates` | `list[TransitionCandidate]` |
 | POST | `/api/jobs` | `EnqueueResponse` |
 | GET | `/api/jobs?status=…` | `list[Job]` |
 

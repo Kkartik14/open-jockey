@@ -17,7 +17,7 @@ from aidj.config import settings
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA_SQL = """
 PRAGMA journal_mode = WAL;
@@ -91,8 +91,8 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE TABLE IF NOT EXISTS candidates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    from_track TEXT NOT NULL REFERENCES tracks(content_hash),
-    to_track TEXT NOT NULL REFERENCES tracks(content_hash),
+    from_track TEXT NOT NULL REFERENCES tracks(content_hash) ON DELETE CASCADE,
+    to_track TEXT NOT NULL REFERENCES tracks(content_hash) ON DELETE CASCADE,
     from_cue_bar INTEGER,
     to_cue_bar INTEGER,
     scores_json TEXT,
@@ -217,6 +217,62 @@ def _migrate_in_place(conn: sqlite3.Connection) -> None:
     # SCHEMA_SQL adds it on legacy DBs and is a no-op on fresh ones. Nothing
     # to detect-and-add; the schema_meta version bump is what signals the
     # contract change to anyone reading the health endpoint.
+
+    # v6: candidate edges must disappear when either endpoint track is deleted.
+    # SQLite cannot ALTER a FK action, so rebuild the table if an older DB has
+    # NO ACTION on from_track/to_track.
+    if _candidates_need_track_cascade(conn):
+        log.info("migrating candidates: adding ON DELETE CASCADE to track FKs")
+        _rebuild_candidates_with_track_cascade(conn)
+
+
+def _candidates_need_track_cascade(conn: sqlite3.Connection) -> bool:
+    tables = {
+        row["name"]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if "candidates" not in tables:
+        return False
+    fk_rows = list(conn.execute("PRAGMA foreign_key_list(candidates)"))
+    track_fks = {
+        row["from"]: row["on_delete"]
+        for row in fk_rows
+        if row["table"] == "tracks" and row["from"] in {"from_track", "to_track"}
+    }
+    return track_fks.get("from_track") != "CASCADE" or track_fks.get("to_track") != "CASCADE"
+
+
+def _rebuild_candidates_with_track_cascade(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP INDEX IF EXISTS idx_candidates_project")
+    conn.executescript(
+        """
+        CREATE TABLE candidates_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            from_track TEXT NOT NULL REFERENCES tracks(content_hash) ON DELETE CASCADE,
+            to_track TEXT NOT NULL REFERENCES tracks(content_hash) ON DELETE CASCADE,
+            from_cue_bar INTEGER,
+            to_cue_bar INTEGER,
+            scores_json TEXT,
+            allowed_techniques TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO candidates_new (
+            id, project_id, from_track, to_track, from_cue_bar, to_cue_bar,
+            scores_json, allowed_techniques, created_at
+        )
+        SELECT
+            c.id, c.project_id, c.from_track, c.to_track, c.from_cue_bar, c.to_cue_bar,
+            c.scores_json, c.allowed_techniques, COALESCE(c.created_at, datetime('now'))
+        FROM candidates c
+        JOIN projects p ON p.id = c.project_id
+        JOIN tracks ft ON ft.content_hash = c.from_track
+        JOIN tracks tt ON tt.content_hash = c.to_track;
+        DROP TABLE candidates;
+        ALTER TABLE candidates_new RENAME TO candidates;
+        CREATE INDEX idx_candidates_project ON candidates(project_id);
+        """
+    )
 
 
 @contextmanager
