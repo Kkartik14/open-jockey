@@ -95,6 +95,13 @@ def test_openapi_keeps_public_routes_and_methods(client: TestClient) -> None:
         "/api/projects/{project_id}": {"get", "delete"},
         "/api/projects/{project_id}/candidates/build": {"post"},
         "/api/projects/{project_id}/candidates": {"get"},
+        "/api/projects/{project_id}/candidates/{candidate_id}/render": {"post"},
+        "/api/projects/{project_id}/renders": {"get"},
+        "/api/renders/{render_id}": {"get", "delete"},
+        "/api/renders/{render_id}/audio": {"get"},
+        "/api/renders/{render_id}/cancel": {"post"},
+        "/api/renders/{render_id}/labels": {"get", "post"},
+        "/api/renders/{render_id}/labels/{label_id}": {"delete"},
         "/api/jobs": {"get", "post"},
     }
 
@@ -150,6 +157,15 @@ def test_openapi_keeps_critical_response_models_and_status_codes(
             "200",
             "TransitionCandidate",
         ),
+        ("/api/projects/{project_id}/candidates/{candidate_id}/render", "post"): (
+            "200",
+            "RenderArtifact",
+        ),
+        ("/api/projects/{project_id}/renders", "get"): ("200", "RenderArtifact"),
+        ("/api/renders/{render_id}", "get"): ("200", "RenderArtifact"),
+        ("/api/renders/{render_id}/cancel", "post"): ("200", "RenderArtifact"),
+        ("/api/renders/{render_id}/labels", "post"): ("201", "RenderLabel"),
+        ("/api/renders/{render_id}/labels", "get"): ("200", "RenderLabel"),
         ("/api/jobs", "post"): ("200", "EnqueueResponse"),
         ("/api/jobs", "get"): ("200", "Job"),
     }
@@ -162,6 +178,8 @@ def test_openapi_keeps_critical_response_models_and_status_codes(
     expected_empty_responses = {
         ("/api/analyses/{run_id}/labels/{label_id}", "delete"): "204",
         ("/api/projects/{project_id}", "delete"): "204",
+        ("/api/renders/{render_id}", "delete"): "204",
+        ("/api/renders/{render_id}/labels/{label_id}", "delete"): "204",
     }
     for (path, method), status in expected_empty_responses.items():
         operation = paths[path][method]
@@ -172,23 +190,27 @@ def test_openapi_keeps_critical_response_models_and_status_codes(
 def test_request_models_all_forbid_extras() -> None:
     from aidj.api.main import (
         AddLabelRequest,
+        AddRenderLabelRequest,
         AnalyzeRequest,
         BuildCandidateGraphRequest,
         CreateProjectRequest,
         EnqueueRequest,
         IngestRequest,
         PluginCallRequest,
+        RenderCandidateRequest,
         UpdateTrackRequest,
     )
 
     request_models = [
         AddLabelRequest,
+        AddRenderLabelRequest,
         AnalyzeRequest,
         BuildCandidateGraphRequest,
         CreateProjectRequest,
         EnqueueRequest,
         IngestRequest,
         PluginCallRequest,
+        RenderCandidateRequest,
         UpdateTrackRequest,
     ]
     for model in request_models:
