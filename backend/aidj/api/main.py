@@ -295,6 +295,9 @@ async def lifespan(app: FastAPI):
     s = settings()
     s.ensure_dirs()
     db.get_conn()
+    recovered_renders = recover_stale_running()
+    if recovered_renders:
+        log.info("recovered %d stale render row(s) on startup", recovered_renders)
     log.info("aidj %s ready (store=%s)", __version__, s.store_root)
     try:
         yield

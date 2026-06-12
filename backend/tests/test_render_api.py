@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from aidj.api import main as api_main
 from aidj.api.main import app
 from aidj.candidate_graph import build_candidate_graph
-from aidj.store import projects, render_artifacts, track_profiles, tracks
+from aidj.store import db, projects, render_artifacts, track_profiles, tracks
 from aidj.store._timestamps import utc_now_iso
 from aidj.store.models import (
     Beat,
@@ -281,6 +281,29 @@ def test_cancel_queued_render_route(client: TestClient, tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == RenderStatus.CANCELLED.value
+
+
+def test_lifespan_recovers_stale_running_render(tmp_aidj, tmp_path: Path) -> None:
+    project, candidate = _project_candidate(tmp_path)
+    running = render_artifacts.create_running(
+        project_id=project.id,
+        candidate_id=candidate.id,
+        from_track=candidate.from_track,
+        to_track=candidate.to_track,
+        technique=RenderTechnique.LONG_CROSSFADE,
+        request_config=_request_config(),
+    )
+    db.execute(
+        "UPDATE render_artifacts SET started_at=? WHERE id=?",
+        ("2020-01-01 00:00:00", running.id),
+    )
+
+    with TestClient(app) as c:
+        response = c.get(f"/api/renders/{running.id}")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == RenderStatus.FAILED.value
+    assert "RUNNING" in response.json()["error"]
 
 
 def test_render_request_rejects_extra_fields(client: TestClient, tmp_path: Path) -> None:

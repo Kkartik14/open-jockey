@@ -75,6 +75,7 @@ _process_lock = threading.Lock()
 _processes: dict[int, subprocess.Popen[bytes]] = {}
 
 _LOUDNESS_METHOD_VERSION = "ffmpeg-loudnorm-v1"
+_loudness_lock = threading.Lock()
 _loudness_cache: dict[tuple[str, float, int, str], RenderLoudnessSummary | None] = {}
 
 
@@ -394,7 +395,7 @@ def _execute_render(
         if rms_dbfs <= SILENCE_THRESHOLD_DBFS:
             raise RenderValidationError(f"render output is silent: middle RMS {rms_dbfs:.1f} dBFS")
         output_loudness = _measure_loudness(output_path).summary
-    except Exception as exc:
+    except (RenderValidationError, subprocess.CalledProcessError, OSError, ValueError) as exc:
         return render_artifacts.fail(
             render_id=render.id,
             claim_token=render.claim_token,
@@ -498,7 +499,14 @@ def _select_technique(
     candidate: TransitionCandidate,
     requested: RenderTechnique | None,
 ) -> RenderTechnique:
-    allowed = [RenderTechnique(tech.value) for tech in candidate.allowed_techniques]
+    allowed: list[RenderTechnique] = []
+    unsupported: list[str] = []
+    for technique in candidate.allowed_techniques:
+        mapped = _render_technique(technique.value)
+        if mapped is None:
+            unsupported.append(technique.value)
+        else:
+            allowed.append(mapped)
     supported_allowed = [tech for tech in allowed if tech in SUPPORTED_TECHNIQUES]
     if requested is not None:
         if requested not in allowed:
@@ -508,9 +516,21 @@ def _select_technique(
         if requested not in SUPPORTED_TECHNIQUES:
             raise RenderValidationError(f"technique {requested.value!r} is not implemented")
         return requested
+    if unsupported and not supported_allowed:
+        names = ", ".join(sorted(unsupported))
+        raise RenderValidationError(
+            f"candidate {candidate.id} advertises unsupported render techniques: {names}"
+        )
     if not supported_allowed:
         raise RenderValidationError(f"candidate {candidate.id} has no supported render techniques")
     return supported_allowed[0]
+
+
+def _render_technique(value: str) -> RenderTechnique | None:
+    try:
+        return RenderTechnique(value)
+    except ValueError:
+        return None
 
 
 def _base_warnings(candidate: TransitionCandidate) -> list[str]:
@@ -760,10 +780,12 @@ def _measure_track_loudness(track: Track, path: Path) -> LoudnessMeasurement:
     except OSError:
         return LoudnessMeasurement(summary=None, origin="unavailable")
     key = (track.content_hash, stat.st_mtime, stat.st_size, _LOUDNESS_METHOD_VERSION)
-    if key in _loudness_cache:
-        return LoudnessMeasurement(summary=_loudness_cache[key], origin="cache")
+    with _loudness_lock:
+        if key in _loudness_cache:
+            return LoudnessMeasurement(summary=_loudness_cache[key], origin="cache")
     measurement = _measure_loudness(path)
-    _loudness_cache[key] = measurement.summary
+    with _loudness_lock:
+        _loudness_cache[key] = measurement.summary
     return LoudnessMeasurement(
         summary=measurement.summary,
         origin="fresh" if measurement.summary is not None else "unavailable",

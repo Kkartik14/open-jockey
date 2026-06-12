@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from aidj.candidate_graph import build_candidate_graph
-from aidj.store import projects, render_artifacts, render_labels, track_profiles, tracks
+from aidj.store import db, projects, render_artifacts, render_labels, track_profiles, tracks
 from aidj.store._timestamps import utc_now_iso
 from aidj.store.models import (
     Beat,
@@ -146,6 +146,68 @@ def test_render_artifact_lifecycle_roundtrip(tmp_aidj, tmp_path: Path) -> None:
         render_artifacts.latest_completed(candidate.id, RenderTechnique.LONG_CROSSFADE).id
         == render.id
     )
+
+
+def test_latest_completed_prefers_newest_finished_then_highest_id(tmp_aidj, tmp_path: Path) -> None:
+    project, candidate = _candidate(tmp_path)
+    assert candidate.id is not None
+    first = render_artifacts.create_running(
+        project_id=project.id,
+        candidate_id=candidate.id,
+        from_track=candidate.from_track,
+        to_track=candidate.to_track,
+        technique=RenderTechnique.LONG_CROSSFADE,
+        request_config=_request_config(),
+    )
+    assert first.claim_token is not None
+    first = render_artifacts.complete(
+        render_id=first.id,
+        claim_token=first.claim_token,
+        duration_sec=30.0,
+        sample_rate=44_100,
+        channels=2,
+        actuals=_actuals(),
+        warnings=[],
+    )
+    second = render_artifacts.create_running(
+        project_id=project.id,
+        candidate_id=candidate.id,
+        from_track=candidate.from_track,
+        to_track=candidate.to_track,
+        technique=RenderTechnique.LONG_CROSSFADE,
+        request_config=_request_config(),
+    )
+    assert second.claim_token is not None
+    second = render_artifacts.complete(
+        render_id=second.id,
+        claim_token=second.claim_token,
+        duration_sec=31.0,
+        sample_rate=44_100,
+        channels=2,
+        actuals=_actuals(),
+        warnings=[],
+    )
+    db.execute(
+        "UPDATE render_artifacts SET finished_at=? WHERE id=?",
+        ("2026-01-01 00:00:01", first.id),
+    )
+    db.execute(
+        "UPDATE render_artifacts SET finished_at=? WHERE id=?",
+        ("2026-01-01 00:00:02", second.id),
+    )
+
+    latest = render_artifacts.latest_completed(candidate.id, RenderTechnique.LONG_CROSSFADE)
+    assert latest is not None
+    assert latest.id == second.id
+
+    db.execute(
+        "UPDATE render_artifacts SET finished_at=? WHERE id IN (?, ?)",
+        ("2026-01-01 00:00:03", first.id, second.id),
+    )
+
+    latest_tie = render_artifacts.latest_completed(candidate.id, RenderTechnique.LONG_CROSSFADE)
+    assert latest_tie is not None
+    assert latest_tie.id == second.id
 
 
 def test_partial_unique_index_blocks_second_running_render(tmp_aidj, tmp_path: Path) -> None:

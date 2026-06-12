@@ -34,6 +34,7 @@ from aidj.store.models import (
 )
 from aidj.transition_renderer import (
     RenderValidationError,
+    _render_technique,
     artifact_path,
     cancel_render,
     cleanup_orphan_render_files,
@@ -177,6 +178,11 @@ def test_render_candidate_reuses_completed_render_without_force(tmp_aidj, tmp_pa
 
     assert first.status is RenderStatus.COMPLETED
     assert second.id == first.id
+
+
+def test_render_technique_mapping_rejects_future_graph_values() -> None:
+    assert _render_technique("long_crossfade") is RenderTechnique.LONG_CROSSFADE
+    assert _render_technique("future_ai_scratch") is None
 
 
 def test_prepare_render_warns_when_analyzer_labels_are_missing(tmp_aidj, tmp_path: Path) -> None:
