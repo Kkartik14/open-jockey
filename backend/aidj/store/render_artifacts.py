@@ -33,7 +33,9 @@ class RunningRenderExists(RuntimeError):
         self.active = active
 
 
-def artifact_key_for(render_id: int, project_id: int, candidate_id: int, technique: RenderTechnique) -> str:
+def artifact_key_for(
+    render_id: int, project_id: int, candidate_id: int, technique: RenderTechnique
+) -> str:
     return f"projects/{project_id}/renders/render-{render_id}-{candidate_id}-{technique.value}.m4a"
 
 

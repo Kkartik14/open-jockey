@@ -64,9 +64,7 @@ def _analysis_run(track_hash: str, *, bpm: float):
 
 def _profile(track_hash: str, *, bpm: float, run_id: int | None) -> TrackProfile:
     prov = FieldProvenance(source="librosa@0.1.0", analysis_run_id=run_id)
-    beats = [
-        Beat(time_sec=round(i * (60.0 / bpm), 3), is_downbeat=(i % 4 == 0)) for i in range(64)
-    ]
+    beats = [Beat(time_sec=round(i * (60.0 / bpm), 3), is_downbeat=(i % 4 == 0)) for i in range(64)]
     key_prov = FieldProvenance(source="essentia@0.1.0", analysis_run_id=None)
     return TrackProfile(
         profile_version=1,
@@ -181,9 +179,7 @@ def test_render_candidate_reuses_completed_render_without_force(tmp_aidj, tmp_pa
     assert second.id == first.id
 
 
-def test_prepare_render_warns_when_analyzer_labels_are_missing(
-    tmp_aidj, tmp_path: Path
-) -> None:
+def test_prepare_render_warns_when_analyzer_labels_are_missing(tmp_aidj, tmp_path: Path) -> None:
     project, candidate = _render_project(tmp_path, label_runs=False)
 
     prepared = prepare_render(
@@ -192,8 +188,12 @@ def test_prepare_render_warns_when_analyzer_labels_are_missing(
         technique=RenderTechnique.LONG_CROSSFADE,
     )
 
-    assert any("source beat-grid analysis has no human listening label" in w for w in prepared.warnings)
-    assert any("target beat-grid analysis has no human listening label" in w for w in prepared.warnings)
+    assert any(
+        "source beat-grid analysis has no human listening label" in w for w in prepared.warnings
+    )
+    assert any(
+        "target beat-grid analysis has no human listening label" in w for w in prepared.warnings
+    )
     assert prepared.request_config.confidence_snapshot.from_beat_labels == []
     assert prepared.request_config.tempo_match_ratio_source == "candidate"
 
@@ -276,7 +276,9 @@ def test_artifact_path_rejects_store_escape(tmp_aidj, tmp_path: Path) -> None:
         technique=RenderTechnique.LONG_CROSSFADE,
         request_config=prepared.request_config,
     )
-    db.execute("UPDATE render_artifacts SET artifact_key=? WHERE id=?", ("../escape.m4a", queued.id))
+    db.execute(
+        "UPDATE render_artifacts SET artifact_key=? WHERE id=?", ("../escape.m4a", queued.id)
+    )
     escaped = render_artifacts.get(queued.id)
     assert escaped is not None
 

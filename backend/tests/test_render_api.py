@@ -48,9 +48,7 @@ def _track(tmp_path: Path, name: str) -> str:
 
 def _profile(track_hash: str, *, bpm: float) -> TrackProfile:
     prov = FieldProvenance(source="librosa@0.1.0", analysis_run_id=None)
-    beats = [
-        Beat(time_sec=round(i * (60.0 / bpm), 3), is_downbeat=(i % 4 == 0)) for i in range(64)
-    ]
+    beats = [Beat(time_sec=round(i * (60.0 / bpm), 3), is_downbeat=(i % 4 == 0)) for i in range(64)]
     key_prov = FieldProvenance(source="essentia@0.1.0", analysis_run_id=None)
     return TrackProfile(
         profile_version=1,

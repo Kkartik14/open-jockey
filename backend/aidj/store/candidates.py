@@ -55,11 +55,15 @@ def replace_for_project(
     """
     desired_keys = {_key(candidate) for candidate in built}
     with db.transaction():
-        existing = db.get_conn().execute(
-            "SELECT id, project_id, from_track, to_track, from_cue_bar, to_cue_bar "
-            "FROM candidates WHERE project_id=?",
-            (project_id,),
-        ).fetchall()
+        existing = (
+            db.get_conn()
+            .execute(
+                "SELECT id, project_id, from_track, to_track, from_cue_bar, to_cue_bar "
+                "FROM candidates WHERE project_id=?",
+                (project_id,),
+            )
+            .fetchall()
+        )
         for row in existing:
             key = (
                 row["project_id"],

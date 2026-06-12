@@ -710,9 +710,7 @@ class RenderArtifact(_ModelBase):
             sample_rate=d.get("sample_rate"),
             channels=d.get("channels"),
             claim_token=d.get("claim_token"),
-            request_config=RenderRequestConfig.model_validate(
-                json.loads(d["request_config_json"])
-            ),
+            request_config=RenderRequestConfig.model_validate(json.loads(d["request_config_json"])),
             actuals=RenderActuals.model_validate(json.loads(d["actuals_json"]))
             if d.get("actuals_json")
             else None,

@@ -224,9 +224,7 @@ def test_candidate_graph_replaces_existing_candidates(tmp_aidj, tmp_path: Path) 
     assert len(candidates.list_for_project(project.id)) == 18
 
 
-def test_candidate_graph_rebuild_preserves_matching_candidate_ids(
-    tmp_aidj, tmp_path: Path
-) -> None:
+def test_candidate_graph_rebuild_preserves_matching_candidate_ids(tmp_aidj, tmp_path: Path) -> None:
     a = _track(tmp_path, "a")
     b = _track(tmp_path, "b")
     for h, bpm in [(a, 120.0), (b, 121.0)]:
@@ -242,8 +240,7 @@ def test_candidate_graph_rebuild_preserves_matching_candidate_ids(
     second = build_candidate_graph(project.id, track_hashes=[a, b])
 
     assert {
-        (c.from_track, c.to_track, c.from_cue_bar, c.to_cue_bar): c.id
-        for c in second.candidates
+        (c.from_track, c.to_track, c.from_cue_bar, c.to_cue_bar): c.id for c in second.candidates
     } == ids_by_key
 
 

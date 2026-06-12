@@ -36,9 +36,7 @@ def _track(tmp_path: Path, name: str) -> str:
 
 def _profile(track_hash: str, *, bpm: float) -> TrackProfile:
     prov = FieldProvenance(source="librosa@0.1.0", analysis_run_id=None)
-    beats = [
-        Beat(time_sec=round(i * (60.0 / bpm), 3), is_downbeat=(i % 4 == 0)) for i in range(96)
-    ]
+    beats = [Beat(time_sec=round(i * (60.0 / bpm), 3), is_downbeat=(i % 4 == 0)) for i in range(96)]
     return TrackProfile(
         profile_version=1,
         track_hash=track_hash,
@@ -144,7 +142,10 @@ def test_render_artifact_lifecycle_roundtrip(tmp_aidj, tmp_path: Path) -> None:
     assert completed.status is RenderStatus.COMPLETED
     assert completed.duration_sec == 42.0
     assert completed.actuals is not None
-    assert render_artifacts.latest_completed(candidate.id, RenderTechnique.LONG_CROSSFADE).id == render.id
+    assert (
+        render_artifacts.latest_completed(candidate.id, RenderTechnique.LONG_CROSSFADE).id
+        == render.id
+    )
 
 
 def test_partial_unique_index_blocks_second_running_render(tmp_aidj, tmp_path: Path) -> None:

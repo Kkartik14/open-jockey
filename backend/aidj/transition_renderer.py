@@ -563,7 +563,9 @@ def _confidence_snapshot(
         to_key_confidence=to_key_conf,
         from_beat_source=_beat_source(from_profile, candidate.scores.from_source),
         to_beat_source=_beat_source(to_profile, candidate.scores.to_source),
-        from_key_source=from_profile.key.provenance.source if from_profile and from_profile.key else None,
+        from_key_source=from_profile.key.provenance.source
+        if from_profile and from_profile.key
+        else None,
         to_key_source=to_profile.key.provenance.source if to_profile and to_profile.key else None,
         from_beat_labels=from_labels,
         to_beat_labels=to_labels,
@@ -634,9 +636,7 @@ def _derive_timing(
             f"source lead-in shortened from {preferred_lead:.1f}s to {source_lead:.1f}s"
         )
     if target_tail < preferred_tail:
-        warnings.append(
-            f"target tail shortened from {preferred_tail:.1f}s to {target_tail:.1f}s"
-        )
+        warnings.append(f"target tail shortened from {preferred_tail:.1f}s to {target_tail:.1f}s")
 
     target_output_duration = transition + target_tail
     return RenderTiming(
