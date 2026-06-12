@@ -1,6 +1,6 @@
 # open-jockey
 
-> A personal, local-first AI DJ — *in active development*. Goal: point it at a folder of music, get back a continuous DJ-style mix, with audio never leaving your machine. **Today the analyzer/labeling/profile layers and an experimental Transition Candidate Graph exist. Planner and Renderer do not. The tool cannot produce a mix yet.**
+> A personal, local-first AI DJ — *in active development*. Goal: point it at a folder of music, get back a continuous DJ-style mix, with audio never leaving your machine. **Today the analyzer/labeling/profile layers, an experimental Transition Candidate Graph, and a first transition renderer exist. Planner and full-set mix generation do not.**
 
 The design splits the work into four layers (see [How it works](#how-it-works)). When complete, open-jockey will do the analysis, planning, and rendering locally so a folder of songs becomes a continuous set without manual beatmatching, cue points, or transition planning. The diagram below describes the *design target*; the [Status](#status) and [Roadmap](#roadmap) sections describe what's actually built today.
 
@@ -12,18 +12,18 @@ The design splits the work into four layers (see [How it works](#how-it-works)).
 
 ## Status
 
-**Phase 0 + Phase 1 done. Phase 2 partly done. Phases 3–7 not started.**
+**Phase 0 + Phase 1 done. Phase 2 partly done. Phase 3 experimental. Phase 4 first pass landed. Planner/full-set work has not started.**
 
 What's actually built today:
 
 - ✅ Phase 0 foundation — project store (SQLite + content-addressed cache), plugin runtime (uv-managed subprocess per plugin), FastAPI app, React/Vite frontend, full pytest suite.
 - ✅ Phase 1 analyzer pipeline — `BeatGridAnalysis` + `KeyAnalysis` schemas, atomic `analysis_runs` lifecycle (claim-token, force, stale recovery), analyze API + dual beat-grid UI with click-track verification, 8 structured failure-mode labels with per-analyzer / per-genre rollup. Plugins: `allin1` (local — currently broken on `madmom` import; quarantined behind `allin1_remote`), `allin1_remote` (Modal GPU, cloud-audio-gated), `librosa` (local baseline), `essentia` (locked, real-hardware run unverified). `madmom_msaf` quarantined.
 - 🚧 Phase 2 — Canonical Track Intelligence (3 of 8 steps in): `TrackProfile` contract + provenance + readiness, `track_profiles` repository, deterministic profile builder, thin profile API (`GET/POST .../profile`, `GET /profiles/coverage`). **Still to do**: energy analyzer, lazy demucs + vocal windows, batch profile build, profile-coverage UI, label-driven analyzer selection. **Real-track analyzer output has been generated, but click-track PASS/FAIL labels still need human listening** — see `private/plan.md`.
-- 🚧 Phase 3 — Transition Candidate Graph: typed `Project`/`TransitionCandidate` contract, project/candidate repositories, deterministic phrase-aligned graph builder, graph API, and a small Library inspection panel. Edges are mechanical candidates over current `TrackProfile` data, not proof that the underlying beat grids are musically correct.
+- 🚧 Phase 3 — Transition Candidate Graph: typed `Project`/`TransitionCandidate` contract, stable candidate identity, project/candidate repositories, deterministic phrase-aligned graph builder, graph API, and a Library inspection panel. Edges are mechanical candidates over current `TrackProfile` data, not proof that the underlying beat grids are musically correct.
+- 🚧 Phase 4 — Transition Renderer first pass: render artifact + render label tables, render API, local ffmpeg execution for every advertised technique (`phrase_swap`, `filter_blend`, `long_crossfade`, `echo_out`), browser-playable render artifacts, cancellation/stale recovery, deletion cleanup, and frontend render/listen/label controls. This can render a transition candidate; it is not a full-set planner or final DJ product.
 
 What's NOT built and what the architecture diagram below describes as *design intent* only:
 
-- ❌ Phase 4 Renderer / automation envelopes (no mix has ever been produced)
 - ❌ Phase 5 Planner (LLM or local heuristic)
 - ❌ Phases 6–7 plan editing UI, polish
 
@@ -33,7 +33,7 @@ See [Roadmap](#roadmap) for the full table.
 
 ## How it works
 
-**Design target (not all layers built — see [Status](#status)).** Four layers, with the **Transition Candidate Graph** acting as a hard contract between deterministic analysis and the non-deterministic LLM. Today the Project Store, Analyzer, in-progress canonical `TrackProfile` layer, and an initial mechanical Candidate Graph exist; Planner and Renderer are the still-to-do work:
+**Design target (not all layers built — see [Status](#status)).** Four layers, with the **Transition Candidate Graph** acting as a hard contract between deterministic analysis and the non-deterministic LLM. Today the Project Store, Analyzer, in-progress canonical `TrackProfile` layer, mechanical Candidate Graph, and first renderer exist; Planner is still-to-do work:
 
 ```
                 +------------------------------------+
@@ -117,7 +117,7 @@ Runtime data (SQLite DB, plugin logs, content-addressed cache) lives in `.aidj/`
 cd backend && uv run pytest -q
 ```
 
-The backend suite is 160+ tests. It covers the store, migrations, API routes, plugin RPC, analyzer runs, labels, waveform peaks, and track-profile persistence.
+The backend suite is 270+ tests. It covers the store, migrations, API routes, plugin RPC, analyzer runs, labels, waveform peaks, track-profile persistence, candidate graphs, and renderer artifacts.
 
 ### CLI
 
@@ -142,7 +142,7 @@ uv run aidj serve --reload --port 8000
 | 1 | Analyzer pipeline (schema/repo/API/plugin contract), `allin1` + `allin1_remote` + `librosa` + `essentia` plugins, dual beat-grid UI, click-track verification, structured failure-mode labels, per-analyzer + per-genre rollup | done (running the bake-off itself is user activity) |
 | 2 | **Canonical Track Intelligence**: `TrackProfile` contract + persistence, deterministic profile builder, local energy analyzer, lazy demucs stem bake-off + vocal windows, batch profile build, profile-coverage UI, label-driven analyzer selection | in progress (builder/API landed; energy/vocals/batch/label-aware selection still open) |
 | 3 | Transition Candidate Graph: cue-point extraction, edge generation, scoring, pruning | experimental mechanical graph landed |
-| 4 | Renderer with automation envelopes, all transition techniques | |
+| 4 | Renderer with automation envelopes, all transition techniques | first pass landed |
 | 5 | Planner: `LocalHeuristicPlanner` baseline + `AnthropicPlanner` with structured outputs + validator | |
 | 6 | Plan editing UI, partial re-render | |
 | 7 | LUFS normalisation, project save/load polish, GPU acceleration | |

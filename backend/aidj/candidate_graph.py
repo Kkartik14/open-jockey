@@ -11,12 +11,14 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from aidj.store import analysis_labels, candidates, projects, track_profiles, tracks
+from aidj.store import analysis_labels, candidates, projects, render_labels, track_profiles, tracks
 from aidj.store.models import (
     AnalysisLabelKind,
     CandidateGraphBuildResult,
     CandidateVerification,
     Readiness,
+    RenderLabelKind,
+    RenderTechnique,
     TrackProfile,
     TransitionCandidate,
     TransitionScores,
@@ -74,6 +76,8 @@ def build_candidate_graph(
 
     profiles, skipped = _usable_profiles(requested)
     labels_by_run = _labels_for_profiles(profiles)
+    genres_by_hash = _genres_for_profiles(profiles)
+    render_feedback = render_labels.rollup_by_technique_and_pair()
 
     built: list[TransitionCandidate] = []
     for source in profiles:
@@ -83,6 +87,8 @@ def build_candidate_graph(
                 source,
                 target,
                 labels_by_run,
+                genres_by_hash,
+                render_feedback,
                 max_candidates=max_candidates_per_pair,
             )
             built.extend(pair_candidates)
@@ -173,11 +179,21 @@ def _labels_for_profiles(
     return {run_id: [label.kind for label in items] for run_id, items in labels.items()}
 
 
+def _genres_for_profiles(profiles: list[TrackProfile]) -> dict[str, str | None]:
+    out: dict[str, str | None] = {}
+    for profile in profiles:
+        track = tracks.get(profile.track_hash)
+        out[profile.track_hash] = track.genre if track is not None else None
+    return out
+
+
 def _build_pair_candidates(
     project_id: int,
     source: TrackProfile,
     target: TrackProfile,
     labels_by_run: dict[int, list[AnalysisLabelKind]],
+    genres_by_hash: dict[str, str | None],
+    render_feedback: dict[tuple[RenderTechnique, str], dict[RenderLabelKind, int]],
     *,
     max_candidates: int,
 ) -> list[TransitionCandidate]:
@@ -186,6 +202,13 @@ def _build_pair_candidates(
 
     tempo_delta = _tempo_delta_pct(source.tempo.bpm, target.tempo.bpm)
     techniques = _allowed_techniques(tempo_delta)
+    family = render_labels.pair_family_key(
+        from_beat_source=source.beat_grid.provenance.source,
+        to_beat_source=target.beat_grid.provenance.source,
+        from_genre=genres_by_hash.get(source.track_hash),
+        to_genre=genres_by_hash.get(target.track_hash),
+    )
+    techniques = _filter_techniques_by_render_feedback(techniques, family, render_feedback)
     if not techniques:
         return []
 
@@ -257,6 +280,7 @@ def _score_candidate(
     return TransitionScores(
         score=round(min(1.0, max(0.0, score)), 6),
         tempo_delta_pct=round(tempo_delta, 6),
+        tempo_match_ratio=round(tempo_match_ratio(source.tempo.bpm, target.tempo.bpm), 6),
         from_bpm=source.tempo.bpm,
         to_bpm=target.tempo.bpm,
         from_cue_sec=from_cue.time_sec,
@@ -286,12 +310,39 @@ def _allowed_techniques(tempo_delta_pct: float) -> list[TransitionTechnique]:
     return []
 
 
+def _filter_techniques_by_render_feedback(
+    techniques: list[TransitionTechnique],
+    family: str,
+    render_feedback: dict[tuple[RenderTechnique, str], dict[RenderLabelKind, int]],
+) -> list[TransitionTechnique]:
+    return [
+        technique
+        for technique in techniques
+        if not _technique_hard_failed(
+            render_feedback.get((RenderTechnique(technique.value), family), {})
+        )
+    ]
+
+
+def _technique_hard_failed(counts: dict[RenderLabelKind, int]) -> bool:
+    bad = sum(counts.get(kind, 0) for kind in render_labels.BAD_RENDER_LABELS)
+    total = sum(counts.values())
+    return bad >= 3 and total > 0 and (bad / total) >= 0.6
+
+
 def _tempo_delta_pct(from_bpm: float, to_bpm: float) -> float:
     if not math.isfinite(from_bpm) or not math.isfinite(to_bpm) or from_bpm <= 0 or to_bpm <= 0:
         return math.inf
     candidates = (to_bpm * 0.5, to_bpm, to_bpm * 2.0)
     best = min(abs(from_bpm - candidate) / from_bpm for candidate in candidates)
     return best * 100.0
+
+
+def tempo_match_ratio(from_bpm: float, to_bpm: float) -> float:
+    """Playback ratio that stretches the incoming track toward the outgoing BPM."""
+    if not math.isfinite(from_bpm) or not math.isfinite(to_bpm) or from_bpm <= 0 or to_bpm <= 0:
+        raise ValueError("from_bpm and to_bpm must be finite positive numbers")
+    return from_bpm / to_bpm
 
 
 def _bar_cues(profile: TrackProfile) -> list[CuePoint]:

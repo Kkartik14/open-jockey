@@ -18,7 +18,7 @@ from aidj.config import settings
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA_SQL = """
 PRAGMA journal_mode = WAL;
@@ -101,6 +101,54 @@ CREATE TABLE IF NOT EXISTS candidates (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_candidates_project ON candidates(project_id);
+
+CREATE TABLE IF NOT EXISTS render_artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+    from_track TEXT NOT NULL REFERENCES tracks(content_hash) ON DELETE CASCADE,
+    to_track TEXT NOT NULL REFERENCES tracks(content_hash) ON DELETE CASCADE,
+    technique TEXT NOT NULL CHECK(technique IN (
+        'phrase_swap','filter_blend','long_crossfade','echo_out'
+    )),
+    status TEXT NOT NULL CHECK(status IN (
+        'queued','running','completed','failed','cancelled'
+    )),
+    artifact_key TEXT UNIQUE,
+    duration_sec REAL,
+    sample_rate INTEGER,
+    channels INTEGER,
+    claim_token TEXT,
+    request_config_json TEXT NOT NULL,
+    actuals_json TEXT,
+    warnings_json TEXT NOT NULL DEFAULT '[]',
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_render_artifacts_project
+ON render_artifacts(project_id);
+CREATE INDEX IF NOT EXISTS idx_render_artifacts_candidate
+ON render_artifacts(candidate_id);
+CREATE INDEX IF NOT EXISTS idx_render_artifacts_status
+ON render_artifacts(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_render_one_running_per_candidate_tech
+ON render_artifacts(candidate_id, technique)
+WHERE status = 'running';
+
+CREATE TABLE IF NOT EXISTS render_labels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    render_id INTEGER NOT NULL REFERENCES render_artifacts(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN (
+        'good','off_beat','bad_cue','bad_energy','bad_key','clipping',
+        'wrong_tempo_match','too_abrupt','too_long','boring','unusable'
+    )),
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_render_labels_render
+ON render_labels(render_id);
 
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -226,6 +274,14 @@ def _migrate_in_place(conn: sqlite3.Connection) -> None:
         log.info("migrating candidates: adding ON DELETE CASCADE to track FKs")
         _rebuild_candidates_with_track_cascade(conn)
 
+    # v7: render artifacts depend on stable candidate ids. De-dupe first so
+    # the natural-key index can be added to any legacy database defensively.
+    _dedupe_candidate_natural_keys(conn)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_stable_natural_key "
+        "ON candidates(project_id, from_track, to_track, from_cue_bar, to_cue_bar)"
+    )
+
 
 def _candidates_need_track_cascade(conn: sqlite3.Connection) -> bool:
     tables = {
@@ -273,6 +329,59 @@ def _rebuild_candidates_with_track_cascade(conn: sqlite3.Connection) -> None:
         CREATE INDEX idx_candidates_project ON candidates(project_id);
         """
     )
+
+
+def _dedupe_candidate_natural_keys(conn: sqlite3.Connection) -> None:
+    tables = {
+        row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if "candidates" not in tables:
+        return
+    duplicate_keys = list(
+        conn.execute(
+            """
+            SELECT project_id, from_track, to_track, from_cue_bar, to_cue_bar, COUNT(*) AS n
+            FROM candidates
+            GROUP BY project_id, from_track, to_track, from_cue_bar, to_cue_bar
+            HAVING n > 1
+            """
+        )
+    )
+    for key in duplicate_keys:
+        params = (
+            key["project_id"],
+            key["from_track"],
+            key["to_track"],
+            key["from_cue_bar"],
+            key["to_cue_bar"],
+        )
+        keep = conn.execute(
+            """
+            SELECT id FROM candidates
+            WHERE project_id=?
+              AND from_track=?
+              AND to_track=?
+              AND from_cue_bar=?
+              AND to_cue_bar=?
+            ORDER BY COALESCE(json_extract(scores_json, '$.score'), -1) DESC, id DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        if keep is None:  # pragma: no cover - key came from the same table
+            continue
+        conn.execute(
+            """
+            DELETE FROM candidates
+            WHERE project_id=?
+              AND from_track=?
+              AND to_track=?
+              AND from_cue_bar=?
+              AND to_cue_bar=?
+              AND id<>?
+            """,
+            (*params, keep["id"]),
+        )
 
 
 @contextmanager

@@ -38,6 +38,8 @@ from aidj.store import (
     db,
     jobs,
     projects,
+    render_artifacts,
+    render_labels,
     track_profiles,
     tracks,
 )
@@ -51,9 +53,22 @@ from aidj.store.models import (
     JobStatus,
     KeyAnalysis,
     Project,
+    RenderArtifact,
+    RenderLabel,
+    RenderLabelKind,
+    RenderTechnique,
     Track,
     TrackProfile,
     TransitionCandidate,
+)
+from aidj.transition_renderer import (
+    RenderConflictError,
+    RenderNotFoundError,
+    RenderValidationError,
+    artifact_path,
+    cancel_render,
+    recover_stale_running,
+    render_candidate,
 )
 
 CLOUD_AUDIO_OPT_IN_ENV = "AIDJ_ALLOW_CLOUD_AUDIO"
@@ -184,6 +199,13 @@ class BuildCandidateGraphRequest(BaseModel):
     force: bool = True
 
 
+class RenderCandidateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    technique: RenderTechnique | None = None
+    force: bool = False
+
+
 class EnqueueResponse(BaseModel):
     id: int
 
@@ -227,6 +249,13 @@ class AddLabelRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
 
 
+class AddRenderLabelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: RenderLabelKind
+    notes: str | None = Field(default=None, max_length=500)
+
+
 class ProfileCoverageResponse(BaseModel):
     """Library-wide ``TrackProfile`` coverage. Drives the readiness summary.
 
@@ -266,6 +295,9 @@ async def lifespan(app: FastAPI):
     s = settings()
     s.ensure_dirs()
     db.get_conn()
+    recovered_renders = recover_stale_running()
+    if recovered_renders:
+        log.info("recovered %d stale render row(s) on startup", recovered_renders)
     log.info("aidj %s ready (store=%s)", __version__, s.store_root)
     try:
         yield
@@ -888,6 +920,136 @@ def list_project_candidates(
     if projects.get(project_id) is None:
         raise HTTPException(status_code=404, detail=f"project not found: {project_id}")
     return candidates.list_for_project(project_id, limit=limit)
+
+
+# ---------------------------------------------------------------------------
+# Transition renders
+# ---------------------------------------------------------------------------
+
+
+@app.post(
+    "/api/projects/{project_id}/candidates/{candidate_id}/render",
+    response_model=RenderArtifact,
+)
+def render_project_candidate(
+    project_id: int,
+    candidate_id: int,
+    body: RenderCandidateRequest,
+) -> RenderArtifact:
+    try:
+        return render_candidate(
+            project_id,
+            candidate_id,
+            technique=body.technique,
+            force=body.force,
+        )
+    except RenderNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RenderValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RenderConflictError as exc:
+        detail: Any = str(exc)
+        if exc.active_render_id is not None:
+            detail = {"message": str(exc), "active_render_id": exc.active_render_id}
+        raise HTTPException(status_code=409, detail=detail) from exc
+
+
+@app.get("/api/projects/{project_id}/renders", response_model=list[RenderArtifact])
+def list_project_renders(
+    project_id: int,
+    limit: int = Query(1000, ge=1, le=10_000),
+) -> list[RenderArtifact]:
+    if projects.get(project_id) is None:
+        raise HTTPException(status_code=404, detail=f"project not found: {project_id}")
+    recover_stale_running()
+    return render_artifacts.list_for_project(project_id, limit=limit)
+
+
+@app.get("/api/renders/{render_id}", response_model=RenderArtifact)
+def get_render(render_id: int) -> RenderArtifact:
+    recover_stale_running()
+    render = render_artifacts.get(render_id)
+    if render is None:
+        raise HTTPException(status_code=404, detail=f"render not found: {render_id}")
+    return render
+
+
+@app.get("/api/renders/{render_id}/audio")
+def stream_render_audio(render_id: int) -> FileResponse:
+    recover_stale_running()
+    render = render_artifacts.get(render_id)
+    if render is None:
+        raise HTTPException(status_code=404, detail=f"render not found: {render_id}")
+    if render.status.value != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"render {render_id} is {render.status.value}, not completed",
+        )
+    try:
+        path = artifact_path(render)
+    except RenderValidationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if not path.is_file():
+        raise HTTPException(status_code=410, detail=f"render artifact missing: {render_id}")
+    return FileResponse(
+        path,
+        media_type="audio/mp4",
+        filename=path.name,
+        content_disposition_type="inline",
+    )
+
+
+@app.post("/api/renders/{render_id}/cancel", response_model=RenderArtifact)
+def cancel_project_render(render_id: int) -> RenderArtifact:
+    try:
+        return cancel_render(render_id)
+    except RenderNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RenderConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.delete("/api/renders/{render_id}", status_code=204)
+def delete_render(render_id: int) -> None:
+    render = render_artifacts.get(render_id)
+    if render is None:
+        raise HTTPException(status_code=404, detail=f"render not found: {render_id}")
+    if render.artifact_key:
+        try:
+            path = artifact_path(render)
+            if path.exists():
+                path.unlink()
+        except OSError as exc:
+            log.warning("failed to unlink render artifact for render %s: %s", render_id, exc)
+        except RenderValidationError as exc:
+            log.warning("invalid render artifact key for render %s: %s", render_id, exc)
+    render_artifacts.delete(render_id)
+
+
+@app.post(
+    "/api/renders/{render_id}/labels",
+    response_model=RenderLabel,
+    status_code=201,
+)
+def add_render_label(render_id: int, body: AddRenderLabelRequest) -> RenderLabel:
+    if render_artifacts.get(render_id) is None:
+        raise HTTPException(status_code=404, detail=f"render not found: {render_id}")
+    return render_labels.add(render_id=render_id, kind=body.kind, notes=body.notes)
+
+
+@app.get("/api/renders/{render_id}/labels", response_model=list[RenderLabel])
+def list_render_labels(render_id: int) -> list[RenderLabel]:
+    if render_artifacts.get(render_id) is None:
+        raise HTTPException(status_code=404, detail=f"render not found: {render_id}")
+    return render_labels.list_for_render(render_id)
+
+
+@app.delete("/api/renders/{render_id}/labels/{label_id}", status_code=204)
+def delete_render_label(render_id: int, label_id: int) -> None:
+    label = render_labels.get(label_id)
+    if label is None or label.render_id != render_id:
+        raise HTTPException(status_code=404, detail=f"render label not found: {label_id}")
+    render_labels.delete(label_id)
 
 
 # ---------------------------------------------------------------------------

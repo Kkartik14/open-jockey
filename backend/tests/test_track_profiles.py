@@ -77,10 +77,10 @@ def _minimal_beatgrid_profile(track_hash: str, *, run_id: int | None = None) -> 
 # ---------------------------------------------------------------------------
 
 
-def test_health_reports_schema_v6(tmp_aidj) -> None:
+def test_health_reports_schema_v7(tmp_aidj) -> None:
     """Sanity check that the schema bump is wired through schema_meta."""
     row = db.fetch_one("SELECT value FROM schema_meta WHERE key='schema_version'")
-    assert row is not None and int(row["value"]) == 6
+    assert row is not None and int(row["value"]) == 7
 
 
 def test_upsert_then_get_roundtrips_full_profile(tmp_aidj, tmp_path: Path) -> None:

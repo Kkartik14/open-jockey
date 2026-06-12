@@ -152,6 +152,45 @@ describe("api client contract", () => {
       call: () => api.listCandidates(7),
       url: "/api/projects/7/candidates",
     },
+    {
+      name: "renderCandidate",
+      call: () =>
+        api.renderCandidate(7, 11, {
+          technique: "long_crossfade",
+          force: true,
+        }),
+      url: "/api/projects/7/candidates/11/render",
+      method: "POST",
+      body: { technique: "long_crossfade", force: true },
+    },
+    {
+      name: "listRenders",
+      call: () => api.listRenders(7),
+      url: "/api/projects/7/renders",
+    },
+    {
+      name: "getRender",
+      call: () => api.getRender(9),
+      url: "/api/renders/9",
+    },
+    {
+      name: "cancelRender",
+      call: () => api.cancelRender(9),
+      url: "/api/renders/9/cancel",
+      method: "POST",
+    },
+    {
+      name: "listRenderLabels",
+      call: () => api.listRenderLabels(9),
+      url: "/api/renders/9/labels",
+    },
+    {
+      name: "addRenderLabel",
+      call: () => api.addRenderLabel(9, "good", "works"),
+      url: "/api/renders/9/labels",
+      method: "POST",
+      body: { kind: "good", notes: "works" },
+    },
   ])("$name calls the locked backend route", async (testCase) => {
     fetchMock.mockResolvedValueOnce(jsonResponse({}));
 
@@ -170,6 +209,7 @@ describe("api client contract", () => {
 
   it("constructs the range-served audio URL without fetching", () => {
     expect(api.audioUrl("abc123")).toBe("/api/tracks/abc123/audio");
+    expect(api.renderAudioUrl(9)).toBe("/api/renders/9/audio");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -237,6 +277,23 @@ describe("api client contract", () => {
 
     fetchMock.mockResolvedValueOnce(new Response("missing", { status: 404, statusText: "Not Found" }));
     await expect(api.deleteProject(7)).rejects.toThrow("404 Not Found");
+  });
+
+  it("deletes renders and render labels through their backend 204 contracts", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await expect(api.deleteRender(9)).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith("/api/renders/9", {
+      method: "DELETE",
+      signal: undefined,
+    });
+
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await expect(api.deleteRenderLabel(9, 4)).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith("/api/renders/9/labels/4", {
+      method: "DELETE",
+      signal: undefined,
+    });
   });
 
   it("passes peak sample count and request timeout signal through to fetch", async () => {
