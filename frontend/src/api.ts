@@ -438,6 +438,18 @@ async function req<T>(
   }
 }
 
+function deleteNoContent(path: string, opts?: RequestOptions): Promise<void> {
+  const { signal, cleanup } = mergeSignals(opts);
+  return fetch(`/api${path}`, {
+    method: "DELETE",
+    signal,
+  })
+    .then((r) => {
+      if (r.status !== 204) throw new Error(`${r.status} ${r.statusText}`);
+    })
+    .finally(cleanup);
+}
+
 export const api = {
   health: (opts?: RequestOptions) => req<Health>("/health", undefined, opts),
   listPlugins: (opts?: RequestOptions) =>
@@ -493,17 +505,8 @@ export const api = {
       { method: "POST", body: JSON.stringify({ kind, notes }) },
       opts,
     ),
-  deleteLabel: (runId: number, labelId: number, opts?: RequestOptions) => {
-    const { signal, cleanup } = mergeSignals(opts);
-    return fetch(`/api/analyses/${runId}/labels/${labelId}`, {
-      method: "DELETE",
-      signal,
-    })
-      .then((r) => {
-        if (r.status !== 204) throw new Error(`${r.status} ${r.statusText}`);
-      })
-      .finally(cleanup);
-  },
+  deleteLabel: (runId: number, labelId: number, opts?: RequestOptions) =>
+    deleteNoContent(`/analyses/${runId}/labels/${labelId}`, opts),
   enqueueJob: (kind: string, payload: unknown = {}, opts?: RequestOptions) =>
     req<{ id: number }>(
       "/jobs",
@@ -550,17 +553,8 @@ export const api = {
     req<Project[]>("/projects", undefined, opts),
   getProject: (projectId: number, opts?: RequestOptions) =>
     req<Project>(`/projects/${projectId}`, undefined, opts),
-  deleteProject: (projectId: number, opts?: RequestOptions) => {
-    const { signal, cleanup } = mergeSignals(opts);
-    return fetch(`/api/projects/${projectId}`, {
-      method: "DELETE",
-      signal,
-    })
-      .then((r) => {
-        if (r.status !== 204) throw new Error(`${r.status} ${r.statusText}`);
-      })
-      .finally(cleanup);
-  },
+  deleteProject: (projectId: number, opts?: RequestOptions) =>
+    deleteNoContent(`/projects/${projectId}`, opts),
   buildCandidateGraph: (
     projectId: number,
     body: {
@@ -604,17 +598,8 @@ export const api = {
       { method: "POST" },
       opts,
     ),
-  deleteRender: (renderId: number, opts?: RequestOptions) => {
-    const { signal, cleanup } = mergeSignals(opts);
-    return fetch(`/api/renders/${renderId}`, {
-      method: "DELETE",
-      signal,
-    })
-      .then((r) => {
-        if (r.status !== 204) throw new Error(`${r.status} ${r.statusText}`);
-      })
-      .finally(cleanup);
-  },
+  deleteRender: (renderId: number, opts?: RequestOptions) =>
+    deleteNoContent(`/renders/${renderId}`, opts),
   listRenderLabels: (renderId: number, opts?: RequestOptions) =>
     req<RenderLabel[]>(`/renders/${renderId}/labels`, undefined, opts),
   addRenderLabel: (
@@ -628,15 +613,6 @@ export const api = {
       { method: "POST", body: JSON.stringify({ kind, notes }) },
       opts,
     ),
-  deleteRenderLabel: (renderId: number, labelId: number, opts?: RequestOptions) => {
-    const { signal, cleanup } = mergeSignals(opts);
-    return fetch(`/api/renders/${renderId}/labels/${labelId}`, {
-      method: "DELETE",
-      signal,
-    })
-      .then((r) => {
-        if (r.status !== 204) throw new Error(`${r.status} ${r.statusText}`);
-      })
-      .finally(cleanup);
-  },
+  deleteRenderLabel: (renderId: number, labelId: number, opts?: RequestOptions) =>
+    deleteNoContent(`/renders/${renderId}/labels/${labelId}`, opts),
 };

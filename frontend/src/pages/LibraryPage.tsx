@@ -153,6 +153,13 @@ export function LibraryPage() {
       patch.renderLabels = {};
       patch.rendersErr = null;
     }
+    if (
+      !mountedRef.current ||
+      seq !== refreshSeqRef.current ||
+      (signal?.aborted ?? false)
+    ) {
+      return;
+    }
     dispatchLibrary(patch);
   }
 

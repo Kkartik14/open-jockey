@@ -173,6 +173,35 @@ def test_partial_unique_index_blocks_second_running_render(tmp_aidj, tmp_path: P
     assert exc.value.active.status is RenderStatus.RUNNING
 
 
+def test_terminal_write_does_not_overwrite_cancelled_render(tmp_aidj, tmp_path: Path) -> None:
+    project, candidate = _candidate(tmp_path)
+    assert candidate.id is not None
+    render = render_artifacts.create_running(
+        project_id=project.id,
+        candidate_id=candidate.id,
+        from_track=candidate.from_track,
+        to_track=candidate.to_track,
+        technique=RenderTechnique.LONG_CROSSFADE,
+        request_config=_request_config(),
+    )
+    assert render.claim_token is not None
+    cancelled = render_artifacts.cancel(render.id, error="cancelled by user")
+    assert cancelled is not None
+
+    after_stale_complete = render_artifacts.complete(
+        render_id=render.id,
+        claim_token=render.claim_token,
+        duration_sec=42.0,
+        sample_rate=44_100,
+        channels=2,
+        actuals=_actuals(),
+        warnings=[],
+    )
+
+    assert after_stale_complete.status is RenderStatus.CANCELLED
+    assert after_stale_complete.duration_sec is None
+
+
 def test_render_labels_roll_up_by_pair_family(tmp_aidj, tmp_path: Path) -> None:
     project, candidate = _candidate(tmp_path)
     assert candidate.id is not None

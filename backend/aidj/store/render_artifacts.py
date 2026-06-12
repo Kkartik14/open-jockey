@@ -240,7 +240,7 @@ def _terminal_write(
         "  warnings_json=?, "
         "  error=?, "
         "  finished_at=? "
-        "WHERE id=? AND claim_token=?",
+        "WHERE id=? AND claim_token=? AND status='running'",
         (
             status.value,
             duration_sec,
@@ -256,7 +256,7 @@ def _terminal_write(
     )
     if cur.rowcount == 0:
         log.warning(
-            "render terminal write discarded - claim token mismatch (render=%s status=%s)",
+            "render terminal write discarded - claim/status mismatch (render=%s status=%s)",
             render_id,
             status.value,
         )
